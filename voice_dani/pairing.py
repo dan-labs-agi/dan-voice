@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 class PairingManager:
     """PIN → session token mapping with TTL, rate limiting, and audit logging."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._pins: dict[str, float] = {}  # pin → created_at
         self._tokens: dict[str, float] = {}  # session_token → created_at
         self._attempts: dict[str, list[float]] = defaultdict(list)  # ip → [timestamps]
@@ -85,12 +85,12 @@ class PairingManager:
             return False
         return True
 
-    def reset_rate_limits(self):
+    def reset_rate_limits(self) -> None:
         """Clear rate limit and lockout state (for tests)."""
         self._attempts.clear()
         self._lockouts.clear()
 
-    def cleanup_expired(self):
+    def cleanup_expired(self) -> None:
         """Remove expired PINs and tokens."""
         now = time.time()
         # Cleanup PINs

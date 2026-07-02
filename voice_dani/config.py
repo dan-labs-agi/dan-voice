@@ -50,12 +50,19 @@ class ServerConfig:
     heartbeat_interval: int = 30
     session_timeout: int = 1800  # 30 minutes
     log_level: str = "warning"
+    log_json: bool = False
 
 
 @dataclass
 class AgentConfig:
-    timeout: int = 30
+    timeout: float = 30.0
     max_retries: int = 3
+
+
+@dataclass
+class MemoryConfig:
+    enabled: bool = True
+    db_path: str = ""  # empty => ~/.dani/memory/dani.db resolved by memory.py
 
 
 @dataclass
@@ -66,6 +73,7 @@ class Config:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
 
     @classmethod
     def from_env(cls) -> Config:
@@ -92,6 +100,14 @@ class Config:
                 host=os.getenv("VD_HOST", "127.0.0.1"),
                 port=int(os.getenv("VD_PORT", "7860")),
                 log_level=os.getenv("VD_LOG_LEVEL", "warning"),
+                log_json=os.getenv("VD_LOG_JSON", "0").lower() in ("1", "true"),
+            ),
+            agent=AgentConfig(
+                timeout=float(os.getenv("VD_AGENT_TIMEOUT", "30.0")),
+            ),
+            memory=MemoryConfig(
+                enabled=os.getenv("VD_MEMORY", "1").lower() not in ("0", "false"),
+                db_path=os.getenv("VD_MEMORY_DB", ""),
             ),
         )
 

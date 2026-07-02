@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import shutil
-from collections.abc import Generator
+import time
+from collections.abc import AsyncGenerator
 
 import numpy as np
 from fastapi import WebSocket
@@ -17,6 +19,7 @@ try:
 except ImportError:
     STT_AVAILABLE = False
 
+from . import memory
 from .config import config
 from .tts import TTSBackend, create_tts_backend
 
@@ -96,7 +99,7 @@ def tts(text: str, voice: str = "Samantha") -> bytes:
 # Agent CLI runner
 # ---------------------------------------------------------------------------
 
-async def run_agent(prompt: str, agent: str = "opencode") -> Generator[str, None, None]:
+async def run_agent(prompt: str, agent: str = "opencode") -> AsyncGenerator[str, None]:
     """Run CLI agent and yield response tokens."""
     bins = {"opencode": "opencode", "claude": "claude", "codex": "codex", "grok": "grok"}
     bin_path = shutil.which(bins.get(agent, agent))
@@ -116,8 +119,25 @@ async def run_agent(prompt: str, agent: str = "opencode") -> Generator[str, None
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
     )
+    start = time.monotonic()
     try:
-        async for line in proc.stdout:
+        while True:
+            remaining = config.agent.timeout - (time.monotonic() - start)
+            try:
+                if remaining <= 0:
+                    raise TimeoutError
+                line = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
+            except TimeoutError:
+                proc.terminate()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=2)
+                except TimeoutError:
+                    proc.kill()
+                log.warning("agent timed out after %.1fs", config.agent.timeout)
+                yield "\n[agent timed out]"
+                return
+            if not line:
+                break
             text = line.decode().strip()
             if not text:
                 continue
@@ -143,7 +163,11 @@ async def run_agent(prompt: str, agent: str = "opencode") -> Generator[str, None
             proc.kill()
         raise
     finally:
-        proc.wait()
+        if getattr(proc, "returncode", None) is None:
+            with contextlib.suppress(TimeoutError, asyncio.CancelledError):
+                await asyncio.wait_for(proc.wait(), timeout=2)
+            if getattr(proc, "returncode", None) is None:
+                proc.kill()
 
 
 # ---------------------------------------------------------------------------
@@ -177,11 +201,12 @@ def _f32_to_pcm16(audio: np.ndarray) -> bytes:
 # Main handler: one-shot per utterance
 # ---------------------------------------------------------------------------
 
-async def handle_audio(ws: WebSocket, agent: str = "opencode"):
+async def handle_audio(ws: WebSocket, agent: str = "opencode") -> None:
     """Handle audio WebSocket session."""
     await ws.send_json({"type": "state", "value": "idle"})
 
     agent_task: asyncio.Task | None = None
+    history: list[tuple[str, str]] = []
 
     try:
         while True:
@@ -214,27 +239,58 @@ async def handle_audio(ws: WebSocket, agent: str = "opencode"):
                 continue
 
             # Phone sends: 1-byte header (0x00) + PCM16 at 48kHz mono
-            pcm = _pcm16_to_f32(data[1:])
-            resampled = _resample(pcm, config.audio.phone_rate, config.audio.stt_rate)
-            audio_pcm16 = _f32_to_pcm16(resampled)
+            try:
+                pcm = _pcm16_to_f32(data[1:])
+                resampled = _resample(pcm, config.audio.phone_rate, config.audio.stt_rate)
+                audio_pcm16 = _f32_to_pcm16(resampled)
+            except Exception as e:
+                log.warning(f"Frame decode failed: {e}")
+                continue
 
             # Transcribe
-            text = await asyncio.to_thread(transcribe, audio_pcm16)
+            try:
+                text = await asyncio.to_thread(transcribe, audio_pcm16)
+            except Exception as e:
+                log.error(f"Transcription failed: {e}")
+                try:
+                    await ws.send_json({"type": "error", "text": "Couldn't process audio"})
+                except Exception:
+                    log.debug("failed to send transcription error frame")
+                continue
             if not text or len(text.strip()) < 3:
                 continue
 
             await ws.send_json({"type": "transcript", "text": text})
             await ws.send_json({"type": "state", "value": "responding"})
 
+            # Build prompt with recent conversation history (last 6 turns)
+            if history:
+                lines = ["Previous conversation:"]
+                for u, a in history[-6:]:
+                    lines.append(f"user: {u}")
+                    lines.append(f"agent: {a}")
+                lines.append("")
+                lines.append(f"Current request: {text}")
+                prompt = "\n".join(lines)
+            else:
+                prompt = text
+
             # Run agent (track as task so we can cancel on barge-in)
             response_parts = []
-            async def _run_and_collect(text=text, parts=response_parts):
-                async for token in run_agent(text, agent):
+            async def _run_and_collect(prompt=prompt, parts=response_parts):
+                async for token in run_agent(prompt, agent):
                     parts.append(token)
             agent_task = asyncio.create_task(_run_and_collect())
             try:
                 await agent_task
             except asyncio.CancelledError:
+                response_parts = []
+            except Exception as e:
+                log.error(f"Agent run failed: {e}")
+                try:
+                    await ws.send_json({"type": "error", "text": "Agent error"})
+                except Exception:
+                    log.debug("failed to send agent error frame")
                 response_parts = []
             finally:
                 agent_task = None
@@ -243,8 +299,19 @@ async def handle_audio(ws: WebSocket, agent: str = "opencode"):
             if not response.strip():
                 continue
 
-            # TTS
-            pcm_data = tts(response)
+            # Session memory: keep last turns for context, and persist to long-term store
+            history.append((text, response))
+            try:
+                memory.retain(f"user: {text}\nagent: {response}", source="voice")
+            except Exception as e:
+                log.warning(f"memory.retain failed: {e}")
+
+            # TTS (graceful degradation: on failure still send text response)
+            try:
+                pcm_data = tts(response)
+            except Exception as e:
+                log.error(f"TTS failed: {e}")
+                pcm_data = b""
             if pcm_data:
                 pcm = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32) / 32768.0
                 resampled = _resample(pcm, config.audio.tts_rate, config.audio.phone_rate)
@@ -263,4 +330,5 @@ async def handle_audio(ws: WebSocket, agent: str = "opencode"):
     finally:
         if agent_task and not agent_task.done():
             agent_task.cancel()
-        await ws.send_json({"type": "state", "value": "idle"})
+        with contextlib.suppress(Exception):
+            await ws.send_json({"type": "state", "value": "idle"})

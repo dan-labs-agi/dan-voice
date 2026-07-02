@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import config
+from .logging_setup import setup_logging
 from .pairing import PairingManager
 
 log = logging.getLogger(__name__)
@@ -35,7 +37,7 @@ _active_connections: set[WebSocket] = set()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan: startup and shutdown."""
     # Startup
     log.info("Voice Dani server starting...")
@@ -71,7 +73,7 @@ async def _cleanup_loop():
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index():
+async def index() -> HTMLResponse:
     if WEB_DIR.exists() and (WEB_DIR / "index.html").exists():
         return HTMLResponse(content=(WEB_DIR / "index.html").read_text(encoding="utf-8"))
     return HTMLResponse(
@@ -80,7 +82,7 @@ async def index():
 
 
 @app.get("/health")
-async def health():
+async def health() -> JSONResponse:
     """Health check endpoint."""
     return JSONResponse({
         "status": "healthy",
@@ -91,18 +93,18 @@ async def health():
 
 
 @app.get("/ready")
-async def ready():
+async def ready() -> JSONResponse:
     """Readiness check endpoint."""
     return JSONResponse({"status": "ready"})
 
 
 @app.post("/api/pair/create")
-async def pair_create():
+async def pair_create() -> dict[str, str]:
     return {"pin": pairing_manager.create_pin()}
 
 
 @app.post("/api/pair/redeem")
-async def pair_redeem(req: dict, request: Request):
+async def pair_redeem(req: dict, request: Request) -> dict[str, str]:
     pin = req.get("pin", "")
     # Use actual TCP connection IP — never trust client-supplied value
     client_ip = request.client.host if request.client else "unknown"
@@ -113,7 +115,7 @@ async def pair_redeem(req: dict, request: Request):
 
 
 @app.websocket("/ws")
-async def websocket_relay(websocket: WebSocket):
+async def websocket_relay(websocket: WebSocket) -> None:
     token = (websocket.query_params.get("token") or "").strip()
     if not token or not pairing_manager.verify(token):
         await websocket.close(code=4401, reason="Invalid or expired token")
@@ -272,6 +274,9 @@ def run(
     """Start the server. Blocks on uvicorn."""
     import uvicorn
 
+    # Configure logging before anything else so all modules log through it.
+    setup_logging(json_mode=config.server.log_json)
+
     actual_port = _find_port(host, port)
 
     # Print startup box (without tunnel URL yet)
@@ -304,6 +309,7 @@ def run(
     cfg = uvicorn.Config(
         app, host=host, port=actual_port,
         log_level=config.server.log_level, ws="websockets",
+        log_config=None,  # keep our setup_logging config; don't let uvicorn clobber it
     )
 
     # Start server in a thread so we can start tunnel after it's listening

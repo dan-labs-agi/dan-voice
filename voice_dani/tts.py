@@ -46,7 +46,7 @@ class PiperTTS(TTSBackend):
         self,
         model_path: str | Path | None = None,
         voice: str = "en_US-lessac-medium",
-    ):
+    ) -> None:
         self._voice = voice
         self._model_path = Path(model_path) if model_path else None
         self._pipe = None
@@ -210,7 +210,7 @@ class PiperTTS(TTSBackend):
 class SayTTS(TTSBackend):
     """macOS say command TTS (fallback, ~200ms latency)."""
 
-    def __init__(self, voice: str = "Samantha"):
+    def __init__(self, voice: str = "Samantha") -> None:
         self._voice = voice
 
     @property

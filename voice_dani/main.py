@@ -10,7 +10,7 @@ def start(
     agent: str = typer.Option("opencode", help="Agent to use (opencode, claude, codex)"),
     port: int = typer.Option(7860, help="Port to listen on"),
     tunnel: bool = typer.Option(True, "--tunnel/--no-tunnel", help="Start Cloudflare tunnel"),
-):
+) -> None:
     from voice_dani.server import run
     run(host="127.0.0.1", port=port, tunnel=tunnel, agent=agent)
 
