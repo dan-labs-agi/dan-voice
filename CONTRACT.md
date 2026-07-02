@@ -1,4 +1,17 @@
-# CONTRACT — Phase 1: Harden voice bridge + Dani CLI skeleton
+# CONTRACT — Phase 2: Semantic memory, core blocks, reflect, vault
+
+## Phase 2 assertions
+
+- [ ] C1 Semantic-lite recall: episodic FTS5 rebuilt with `tokenize='porter unicode61'` (stemming: "decide" matches "decided" — note Porter stems decision→decis ≠ deciding→decid); idempotent migration preserving rows, both Python and TS create identical schema. Neural embeddings deferred (C: disk 0.26GB — ASSUMPTIONS.md). Test: retain "deciding things", recall "decision" → hit.
+- [ ] C2 Core memory blocks (Letta-style): `~/.dani/memory/core.md`, `## <block>` sections. Python `memory.load_core() -> str` never-raise. `dani core show` prints; `dani core set <block> "<text>"` replaces that section (= core_memory_replace). Test: set → show → load_core roundtrip.
+- [ ] C3 Frozen snapshot: voice server reads core.md ONCE per WS connection (at connect), prepends to every agent prompt that session; mid-session core edits don't mutate live session. Test: fake WS, mutate core mid-session, prompt unchanged.
+- [ ] C4 `dani reflect`: pulls last N episodic rows (default 20), spawns reflection agent CLI (`DANI_REFLECT_AGENT`, default claude), parses decisions → writes `~/.dani/memory/decisions/<date>-<slug>.md` with `[[wiki-links]]` + retains rows source="decision"; graceful message when agent CLI missing. Test: mocked agent output → note file + FTS row.
+- [ ] C5 Vault: `~/.dani/memory/` is Obsidian-compatible (markdown + wiki-links); decisions link `[[core]]` / related skills. README documents opening as vault.
+- [ ] C6 Gates: pytest zero failures, ruff clean, bun CLI verify commands pass.
+
+---
+
+# CONTRACT — Phase 1 (DONE): Harden voice bridge + Dani CLI skeleton
 
 Evaluator grades against these assertions only. Testable = pytest or CLI command with expected output.
 

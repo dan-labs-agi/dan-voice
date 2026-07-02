@@ -208,6 +208,10 @@ async def handle_audio(ws: WebSocket, agent: str = "opencode") -> None:
     agent_task: asyncio.Task | None = None
     history: list[tuple[str, str]] = []
 
+    # Frozen core-memory snapshot (CONTRACT C3): read once at connection start
+    # so mid-session core.md edits never affect the live session.
+    core_snapshot = memory.load_core()
+
     try:
         while True:
             msg = await ws.receive()
@@ -274,6 +278,10 @@ async def handle_audio(ws: WebSocket, agent: str = "opencode") -> None:
                 prompt = "\n".join(lines)
             else:
                 prompt = text
+
+            # Prepend the frozen core-memory snapshot before everything else.
+            if core_snapshot:
+                prompt = f"Core memory:\n{core_snapshot}\n\n{prompt}"
 
             # Run agent (track as task so we can cancel on barge-in)
             response_parts = []
