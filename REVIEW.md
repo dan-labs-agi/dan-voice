@@ -1,45 +1,39 @@
-# REVIEW — 2026-07-03 — Phase 1: Harden voice bridge + dani CLI skeleton
+# REVIEW — 2026-07-03 — Phase 2: Semantic-lite memory, core blocks, reflect, vault
 
 ## What was built
 
-**dan-voice (commit c3ee6d1):**
-- `voice_dani/memory.py` — episodic memory: SQLite FTS5 at `~/.dani/memory/dani.db`, WAL mode, injection sanitize (ANSI/control chars/chat-template tokens) before persist, never-raise API (`retain`/`recall`).
-- `voice_dani/audio_handler.py` — agent subprocess deadline (`VD_AGENT_TIMEOUT`, 30s default, graceful "[agent timed out]"); per-connection chat history, last 6 turns prepended to agent prompt; every turn retained to memory; error boundaries: garbage frame → skip, STT fail → error msg + continue, TTS fail → text-only response, agent fail → error msg + connection lives.
-- `voice_dani/logging_setup.py` — one-line JSON logs (`VD_LOG_JSON=1`), stdlib only.
-- Type hints on all public functions across package.
-- 2 latent bugs found & fixed during hardening: never-awaited `proc.wait()` (zombie subprocess on every normal agent completion), `finally` `send_json` masking real exceptions on disconnect.
+**dan-voice (`8d61010`):**
+- FTS5 episodic table rebuilt with `tokenize='porter unicode61'` — stemmed recall ("decide" finds "decided"). Idempotent migration preserves existing rows; same migration in both languages.
+- Core memory blocks (Letta-style): `~/.dani/memory/core.md`, `## <block>` sections. `memory.load_core()` / `memory.set_core_block()`, sanitized, never-raise.
+- Frozen snapshot: voice server reads core.md once per WS connection, prepends `Core memory:` to every agent prompt that session; mid-session edits don't leak in (test-proven).
 
-**dani CLI (new repo `D:\finfin\Origin\dani`, commit 3276d75):**
-- Bun + `bun:sqlite`, zero npm deps. Commands: `voice` (spawns dan-voice server), `retain`, `recall`, `skill list` (agentskills.io frontmatter, names-only disclosure).
-- Shared-DB integration proven: Python `retain(source="voice")` → `bun dani recall` returns the row.
+**dani CLI (`46e1386`):**
+- `dani core show` / `dani core set <block> "<text>"` — edits the same core.md the voice server snapshots (cross-language verified live).
+- `dani reflect [--last N]` — distills recent conversation via CLI agent (`DANI_REFLECT_AGENT`, default `claude --print`, 60s timeout): writes `decisions/<date>-<slug>.md` with `[[wiki-links]]` + FTS rows `source="decision"`, plus agentskills.io skill files. Clean failure when no agent installed.
+- `~/.dani/memory/` is now an Obsidian-compatible vault (markdown, wiki-links, decisions/, skills/).
+- Fix: `skill list` honored hardcoded homedir — now tracks memory dir.
 
 ## Test coverage
-51 passed / 3 skipped, ruff clean. New: 15 tests — memory roundtrip/rank/sanitize/never-raise/schema-contract-guard, JSON formatter, agent timeout (<5s wall), session history across turns, garbage-frame resilience.
-
-## Performance
-Not benchmarked this phase (no STT/TTS backends on this Windows box — CI is ubuntu, real latency needs the Mac/phone rig). Spec targets (STT<2s, TTS<1s, e2e<5s) = next milestone with real hardware.
+59 passed / 3 skipped, ruff clean. +8 tests: block roundtrip/isolation/sanitize/never-raise, frozen-snapshot proof (mid-session mutation invisible), stemmed recall.
 
 ## Architecture decisions
-- FTS5 over vector DB: stdlib both languages, zero deps, WAL = the file-locking requirement. Vector layer Phase 2.
-- One-shot per utterance preserved; multi-turn = text preamble, not agent-native sessions (works with every CLI agent uniformly).
-- OAuth / Composio / Zen proxy / cloud deferred — blocked on external accounts, not code (ASSUMPTIONS.md).
+- Neural embeddings deferred: C: drive at 0.26GB free — fastembed+sqlite-vec (~150MB) doesn't fit. Semantic v1 = porter+BM25 (zero disk). `recall()` is the single swap seam.
+- Reflect via CLI-agent shell-out: no API keys, reuses user's installed agent — consistent with the whole dan-voice philosophy.
+- Contract bug caught by builder: Porter stems decision→decis vs deciding→decid — original test pair wasn't stem-equivalent. Fixed contract + test.
 
 ## Taste score
-- Design 8 — memory contract shared cross-language via one schema string; never-raise boundaries.
-- Originality 6 — deliberately boring (FTS5, stdlib); boring is the feature here.
-- Craft 8 — two real latent bugs caught; every new path tested.
-- Functionality 7 — all CONTRACT items green locally; live phone round-trip unverified on this box.
+Design 8 · Originality 7 (reflect-via-CLI-agent is neat) · Craft 8 · Functionality 7 (reflect untested with real claude binary — echo-file hatch only).
 
 ## Known limitations / debt
-- `dani voice` spawn wiring untested live (needs uv env smoke run).
-- `getattr(proc, "returncode", None)` in run_agent finally — accommodates test fake; fake should grow the attr instead.
-- Memory has no dedup/TTL — DB grows unbounded (fine for v1).
-- CI still never run (no push).
+- Reflect parsing = line-prefix protocol (DECISION:/SKILL:) — real agent output may drift; needs a live run with claude installed.
+- ⚠️ C: drive 0.26GB free — user action needed (blocks neural embeddings, risks Windows stability).
+- CI still local-only (no push).
+- `dani voice` live smoke still pending.
 
 ## 3 questions needing human taste
-1. History-in-prompt: 6 turns as plain text preamble — or should `--agent claude` use Claude Code's native `--continue` session instead? (Better memory, agent-specific code.)
-2. `dani recall` output format: raw rows now. Want an LLM-synthesized answer ("what did we decide about auth?" → one sentence) — costs an agent call per recall?
-3. Memory granularity: full turns retained now. Also retain distilled "decisions" (separate `source="decision"`) triggered by keyword, or wait for Phase 2 semantic layer?
+1. Reflect cadence: manual `dani reflect` now — auto-run after each voice session ends (server-side hook), or stay manual?
+2. Core memory blocks: should the voice agent be able to EDIT its own core (tool-call style, true Letta) — or human-only via CLI for now?
+3. Vault location `~/.dani/memory/` — keep, or point into an existing Obsidian vault of yours (env var)?
 
 ## Options
-(a) continue → Phase 2 (semantic/vector memory, skill auto-gen) · (b) live smoke on phone rig · (c) push both repos + CI · (d) refactor per Q1-Q3.
+(a) Phase 3: skill auto-gen + reflect auto-cadence + live phone smoke · (b) push both repos, light CI · (c) live reflect test with real claude · (d) refactor per questions.
