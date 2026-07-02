@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import threading
-import json
+import contextlib
 import logging
-import os
 import re
 import shutil
 import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -53,10 +52,8 @@ async def lifespan(app: FastAPI):
         _tunnel_proc = None
     # Close all active connections
     for ws in list(_active_connections):
-        try:
+        with contextlib.suppress(Exception):
             await ws.close(code=1001, reason="Server shutting down")
-        except Exception:
-            pass
     _active_connections.clear()
 
 
@@ -77,7 +74,9 @@ async def _cleanup_loop():
 async def index():
     if WEB_DIR.exists() and (WEB_DIR / "index.html").exists():
         return HTMLResponse(content=(WEB_DIR / "index.html").read_text(encoding="utf-8"))
-    return HTMLResponse(content="<html><body><h1>Voice Dani</h1><p>Web UI not found.</p></body></html>")
+    return HTMLResponse(
+        content="<html><body><h1>Voice Dani</h1><p>Web UI not found.</p></body></html>"
+    )
 
 
 @app.get("/health")
@@ -134,10 +133,8 @@ async def websocket_relay(websocket: WebSocket):
         pass
     except Exception as e:
         log.error(f"WebSocket error: {e}")
-        try:
+        with contextlib.suppress(Exception):
             await websocket.send_json({"type": "error", "text": str(e)})
-        except Exception:
-            pass
     finally:
         heartbeat_task.cancel()
         _active_connections.discard(websocket)

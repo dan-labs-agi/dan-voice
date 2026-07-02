@@ -5,11 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import shutil
-import subprocess
-import tempfile
-from typing import Generator
+from collections.abc import Generator
 
 import numpy as np
 from fastapi import WebSocket
@@ -21,7 +18,7 @@ except ImportError:
     STT_AVAILABLE = False
 
 from .config import config
-from .tts import TTSBackend, PiperTTS, SayTTS, create_tts_backend
+from .tts import TTSBackend, create_tts_backend
 
 log = logging.getLogger(__name__)
 
@@ -142,7 +139,7 @@ async def run_agent(prompt: str, agent: str = "opencode") -> Generator[str, None
         proc.terminate()
         try:
             await asyncio.wait_for(proc.wait(), timeout=2)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
         raise
     finally:
@@ -231,10 +228,9 @@ async def handle_audio(ws: WebSocket, agent: str = "opencode"):
 
             # Run agent (track as task so we can cancel on barge-in)
             response_parts = []
-            async def _run_and_collect():
-                nonlocal response_parts
+            async def _run_and_collect(text=text, parts=response_parts):
                 async for token in run_agent(text, agent):
-                    response_parts.append(token)
+                    parts.append(token)
             agent_task = asyncio.create_task(_run_and_collect())
             try:
                 await agent_task

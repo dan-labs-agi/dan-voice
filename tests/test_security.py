@@ -1,6 +1,7 @@
 """Security tests for pairing: rate limiting, IP lockout, PIN validation."""
 
 import time
+
 import pytest
 
 from voice_dani.pairing import PairingManager

@@ -1,14 +1,12 @@
 """Allow `python -m voice_dani` or `dan-voice` to start the server."""
 
 import sys
-import threading
-import time
-from .server import print_startup_box, run as _run_server
+
+from .server import run as _run_server
 
 
 def run(agent: str = "opencode", tunnel: bool = True) -> None:
     """Entry point for both `python -m voice_dani` and `dan-voice` CLI."""
-    from .server import run as _run_server
 
     # Run server directly (handles startup box and tunnel internally)
     _run_server(agent=agent, tunnel=tunnel)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import abc
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -107,8 +108,7 @@ class PiperTTS(TTSBackend):
     def _find_piper(self) -> list[str] | None:
         """Find piper binary."""
         # Check PATH
-        piper = subprocess.run(["which", "piper"], capture_output=True, text=True)
-        if piper.returncode == 0:
+        if shutil.which("piper"):
             return ["piper"]
 
         # Check common locations
@@ -147,12 +147,12 @@ class PiperTTS(TTSBackend):
             return str(model_file)
 
         # Download from HuggingFace
-        url = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx"
+        url = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx"
         log.info(f"Downloading Piper voice model to {model_file}...")
 
         try:
             import urllib.request
-            urllib.request.urlretrieve(url, str(model_file))
+            urllib.request.urlretrieve(url, str(model_file))  # noqa: S310
             return str(model_file)
         except Exception as e:
             log.error(f"Failed to download Piper model: {e}")
@@ -255,7 +255,6 @@ class SayTTS(TTSBackend):
 
         num_channels = int.from_bytes(data[22:24], "little")
         bits_per_sample = int.from_bytes(data[34:36], "little")
-        sample_rate = int.from_bytes(data[24:28], "little")
 
         # Find data chunk
         off = 12
@@ -274,7 +273,8 @@ class SayTTS(TTSBackend):
         # Convert stereo to mono if needed
         if num_channels == 2 and bits_per_sample == 16:
             samples = np.frombuffer(pcm_data, dtype=np.int16)
-            mono = ((samples[0::2].astype(np.int32) + samples[1::2].astype(np.int32)) // 2).astype(np.int16)
+            mixed = samples[0::2].astype(np.int32) + samples[1::2].astype(np.int32)
+            mono = (mixed // 2).astype(np.int16)
             return mono.tobytes()
 
         return pcm_data
@@ -290,8 +290,8 @@ def create_tts_backend() -> TTSBackend:
         if test:
             log.info("Using Piper TTS backend")
             return piper
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"Piper TTS unavailable: {e}")
 
     # Fallback to macOS say
     if os.path.exists("/usr/bin/say"):

@@ -6,8 +6,8 @@ import sys
 import time
 from pathlib import Path
 
-import pytest
 import httpx
+import pytest
 import websockets
 
 # Ensure the project root is on sys.path
@@ -26,8 +26,9 @@ WS_BASE = f"ws://127.0.0.1:{PORT}"
 @pytest.fixture(scope="module")
 def server_url():
     """Start the server once per module, yield base URL."""
-    import uvicorn
     import threading
+
+    import uvicorn
 
     from voice_dani.server import app
 
@@ -147,7 +148,7 @@ class TestWebSocket:
             for _ in range(3):
                 try:
                     await asyncio.wait_for(ws.recv(), timeout=0.5)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     break
             # Send a text message (server doesn't handle ping in one-shot mode)
             await ws.send(json.dumps({"type": "text", "text": "test"}))
@@ -157,7 +158,7 @@ class TestWebSocket:
                 resp = await asyncio.wait_for(ws.recv(), timeout=2)
                 data = json.loads(resp)
                 assert "type" in data
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass  # No response is fine for this test
 
 
@@ -178,7 +179,8 @@ class TestAudioPipeline:
 
     def test_resample_helpers(self):
         import numpy as np
-        from voice_dani.audio_handler import _resample, _pcm16_to_f32
+
+        from voice_dani.audio_handler import _pcm16_to_f32, _resample
         # Test pcm16 -> f32
         pcm = np.array([0, 16384, -16384, 32767, -32768], dtype=np.int16)
         f32 = _pcm16_to_f32(pcm.tobytes())
@@ -189,11 +191,11 @@ class TestAudioPipeline:
         resampled = _resample(audio, 16000, 8000)
         assert len(resampled) == 800
 
+    @pytest.mark.skipif(sys.platform != "darwin", reason="say is macOS-only")
     def test_tts_uses_say_command(self):
         """Check macOS say command is available."""
-        import subprocess
-        result = subprocess.run(["which", "say"], capture_output=True)
-        assert result.returncode == 0, "macOS say command not found"
+        import shutil
+        assert shutil.which("say"), "macOS say command not found"
 
     def test_run_agent_exists(self):
         from voice_dani.audio_handler import run_agent

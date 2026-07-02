@@ -58,7 +58,9 @@ class PairingManager:
             # Check for lockout
             if len(recent) + 1 >= config.security.max_pin_attempts:
                 self._lockouts[client_ip] = now + config.security.pin_lockout_duration
-                log.warning(f"IP locked out for {config.security.pin_lockout_duration}s: {client_ip}")
+                log.warning(
+                    f"IP locked out for {config.security.pin_lockout_duration}s: {client_ip}"
+                )
             return None
 
         # Check TTL
@@ -96,7 +98,10 @@ class PairingManager:
         for p in expired_pins:
             del self._pins[p]
         # Cleanup tokens
-        expired_tokens = [t for t, created in self._tokens.items() if now - created > config.security.session_ttl]
+        expired_tokens = [
+            t for t, created in self._tokens.items()
+            if now - created > config.security.session_ttl
+        ]
         for t in expired_tokens:
             del self._tokens[t]
         # Cleanup lockouts
