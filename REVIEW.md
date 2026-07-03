@@ -1,39 +1,49 @@
-# REVIEW — 2026-07-03 — Phase 2: Semantic-lite memory, core blocks, reflect, vault
+# REVIEW — 2026-07-03 — Phase 3: Neural memory, session hooks, error learning
 
 ## What was built
 
-**dan-voice (`8d61010`):**
-- FTS5 episodic table rebuilt with `tokenize='porter unicode61'` — stemmed recall ("decide" finds "decided"). Idempotent migration preserves existing rows; same migration in both languages.
-- Core memory blocks (Letta-style): `~/.dani/memory/core.md`, `## <block>` sections. `memory.load_core()` / `memory.set_core_block()`, sanitized, never-raise.
-- Frozen snapshot: voice server reads core.md once per WS connection, prepends `Core memory:` to every agent prompt that session; mid-session edits don't leak in (test-proven).
+**dan-voice (`0eba2c8`):**
+- Neural semantic memory: fastembed (bge-small-en-v1.5 quantized, 65MB → `~/.dani/models`) + sqlite-vec KNN in the same `dani.db`. `python -m voice_dani.semantic reindex|search`. Optional extra `semantic`; everything degrades gracefully without it.
+- Session-end hook: `VD_SESSION_END_CMD` spawns any command (detached) after a voice session with ≥1 turn — the auto-reflect cadence answer without hardcoding bun paths into Python.
+- Error learning (Hermes-style): STT failures, agent crashes, timeouts retained as `source="error"` rows — `dani reflect` distills lessons from failures too.
+- Windows bug fixed: Unicode startup box crashed the server on cp1252 consoles (redirected stdout) — found by live smoke, UTF-8 reconfigure in `__main__`.
+- Test-isolation bug fixed: hardening tests read the user's real core.md.
 
-**dani CLI (`46e1386`):**
-- `dani core show` / `dani core set <block> "<text>"` — edits the same core.md the voice server snapshots (cross-language verified live).
-- `dani reflect [--last N]` — distills recent conversation via CLI agent (`DANI_REFLECT_AGENT`, default `claude --print`, 60s timeout): writes `decisions/<date>-<slug>.md` with `[[wiki-links]]` + FTS rows `source="decision"`, plus agentskills.io skill files. Clean failure when no agent installed.
-- `~/.dani/memory/` is now an Obsidian-compatible vault (markdown, wiki-links, decisions/, skills/).
-- Fix: `skill list` honored hardcoded homedir — now tracks memory dir.
+**dani CLI (`2f09681`):** `dani recall "<q>" --semantic` — bridges to the Python neural search.
 
-## Test coverage
-59 passed / 3 skipped, ruff clean. +8 tests: block roundtrip/isolation/sanitize/never-raise, frozen-snapshot proof (mid-session mutation invisible), stemmed recall.
+## Live verification (real, not mocked)
+- `dani voice` → server up via bun spawn, `/health` 200, tunnel child spawned. ✓
+- `dani reflect --last 10` with real claude → `reflected: 3 decisions, 1 skills.` — vault notes with `[[core]]`, FTS rows, skill listed. ✓
+- `dani recall "public url" --semantic` → 5 neural rows. ✓
+- Cross-language core.md write/read. ✓
 
-## Architecture decisions
-- Neural embeddings deferred: C: drive at 0.26GB free — fastembed+sqlite-vec (~150MB) doesn't fit. Semantic v1 = porter+BM25 (zero disk). `recall()` is the single swap seam.
-- Reflect via CLI-agent shell-out: no API keys, reuses user's installed agent — consistent with the whole dan-voice philosophy.
-- Contract bug caught by builder: Porter stems decision→decis vs deciding→decid — original test pair wasn't stem-equivalent. Fixed contract + test.
+## Gates
+66 passed / 3 skipped, ruff clean. +8 tests this phase.
+
+## Spec scorecard (original success criteria)
+| Criterion | Status |
+|---|---|
+| `dani recall/retain/reflect` across sessions | ✅ live |
+| Auto-generated skills in vault | ✅ via reflect |
+| Obsidian vault | ✅ local vault; bidirectional sync N/A (same files) |
+| Free tier zero config | ✅ FTS5 default, semantic opt-in |
+| Injection scan + file locking + frozen snapshot | ✅ |
+| `dani voice` | ✅ smoke-tested |
+| Google OAuth / Composio / Zen proxy / cloud | ⏸ need external accounts (ASSUMPTIONS.md) |
+| curl install / `dani login` | ⏸ needs hosted endpoint |
 
 ## Taste score
-Design 8 · Originality 7 (reflect-via-CLI-agent is neat) · Craft 8 · Functionality 7 (reflect untested with real claude binary — echo-file hatch only).
+Design 8 · Originality 7 · Craft 8 · Functionality 8 (three live end-to-end proofs this phase).
 
 ## Known limitations / debt
-- Reflect parsing = line-prefix protocol (DECISION:/SKILL:) — real agent output may drift; needs a live run with claude installed.
-- ⚠️ C: drive 0.26GB free — user action needed (blocks neural embeddings, risks Windows stability).
-- CI still local-only (no push).
-- `dani voice` live smoke still pending.
+- Semantic index not auto-updated per turn — reindex via session-end hook or manual (documented; model-in-server-RAM tradeoff deliberate).
+- Reflect line-protocol parsing may drift with agent output style — worked live with claude today.
+- CI never run (no push). Phone round-trip untested (needs real phone rig).
 
-## 3 questions needing human taste
-1. Reflect cadence: manual `dani reflect` now — auto-run after each voice session ends (server-side hook), or stay manual?
-2. Core memory blocks: should the voice agent be able to EDIT its own core (tool-call style, true Letta) — or human-only via CLI for now?
-3. Vault location `~/.dani/memory/` — keep, or point into an existing Obsidian vault of yours (env var)?
+## 3 questions
+1. Push both repos to GitHub now? (CI lights up, needs remote URLs.)
+2. Phone smoke: you open tunnel URL on phone, speak, verify e2e — schedule?
+3. Next big rock: Composio/OAuth (needs your accounts) vs `dani loop` (autonomous dev loop command) vs polish?
 
 ## Options
-(a) Phase 3: skill auto-gen + reflect auto-cadence + live phone smoke · (b) push both repos, light CI · (c) live reflect test with real claude · (d) refactor per questions.
+(a) `dani loop` + harness features · (b) push + CI · (c) phone e2e session · (d) Composio/OAuth (bring accounts).
