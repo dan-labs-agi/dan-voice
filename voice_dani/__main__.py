@@ -8,6 +8,11 @@ from .server import run as _run_server
 def run(agent: str = "opencode", tunnel: bool = True) -> None:
     """Entry point for both `python -m voice_dani` and `dan-voice` CLI."""
 
+    # Windows cp1252 consoles crash on the Unicode startup box — force UTF-8
+    for stream in (sys.stdout, sys.stderr):
+        if stream and stream.encoding and stream.encoding.lower() not in ("utf-8", "utf8"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
     # Run server directly (handles startup box and tunnel internally)
     _run_server(agent=agent, tunnel=tunnel)
 

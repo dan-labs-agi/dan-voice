@@ -51,6 +51,8 @@ class ServerConfig:
     session_timeout: int = 1800  # 30 minutes
     log_level: str = "warning"
     log_json: bool = False
+    # session-end hook, e.g. VD_SESSION_END_CMD="bun /path/dani.ts reflect"
+    session_end_cmd: str = ""
 
 
 @dataclass
@@ -101,6 +103,7 @@ class Config:
                 port=int(os.getenv("VD_PORT", "7860")),
                 log_level=os.getenv("VD_LOG_LEVEL", "warning"),
                 log_json=os.getenv("VD_LOG_JSON", "0").lower() in ("1", "true"),
+                session_end_cmd=os.getenv("VD_SESSION_END_CMD", ""),
             ),
             agent=AgentConfig(
                 timeout=float(os.getenv("VD_AGENT_TIMEOUT", "30.0")),

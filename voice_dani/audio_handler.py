@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import shutil
+import subprocess
 import time
 from collections.abc import AsyncGenerator
 
@@ -134,6 +135,13 @@ async def run_agent(prompt: str, agent: str = "opencode") -> AsyncGenerator[str,
                 except TimeoutError:
                     proc.kill()
                 log.warning("agent timed out after %.1fs", config.agent.timeout)
+                try:
+                    memory.retain(
+                        f"error: agent timed out after {config.agent.timeout}s",
+                        source="error",
+                    )
+                except Exception:
+                    log.debug("error retention failed")
                 yield "\n[agent timed out]"
                 return
             if not line:
@@ -257,6 +265,10 @@ async def handle_audio(ws: WebSocket, agent: str = "opencode") -> None:
             except Exception as e:
                 log.error(f"Transcription failed: {e}")
                 try:
+                    memory.retain(f"error: transcription failed: {e}", source="error")
+                except Exception:
+                    log.debug("error retention failed")
+                try:
                     await ws.send_json({"type": "error", "text": "Couldn't process audio"})
                 except Exception:
                     log.debug("failed to send transcription error frame")
@@ -295,6 +307,10 @@ async def handle_audio(ws: WebSocket, agent: str = "opencode") -> None:
                 response_parts = []
             except Exception as e:
                 log.error(f"Agent run failed: {e}")
+                try:
+                    memory.retain(f"error: agent run failed: {e}", source="error")
+                except Exception:
+                    log.debug("error retention failed")
                 try:
                     await ws.send_json({"type": "error", "text": "Agent error"})
                 except Exception:
@@ -340,3 +356,16 @@ async def handle_audio(ws: WebSocket, agent: str = "opencode") -> None:
             agent_task.cancel()
         with contextlib.suppress(Exception):
             await ws.send_json({"type": "state", "value": "idle"})
+        # session-end hook, e.g. VD_SESSION_END_CMD="bun /path/dani.ts reflect"
+        if config.server.session_end_cmd and history:
+            try:
+                # shell=True intentional: user-supplied command line, their own
+                # machine, documented via VD_SESSION_END_CMD. Fire-and-forget detached.
+                subprocess.Popen(  # noqa: S602, ASYNC220
+                    config.server.session_end_cmd,
+                    shell=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception as e:
+                log.warning(f"session-end hook failed: {e}")
