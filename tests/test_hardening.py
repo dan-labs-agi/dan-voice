@@ -14,10 +14,19 @@ server. Each test drives run_agent / handle_audio directly with fakes.
 import asyncio
 import time
 
+import pytest
 from fastapi import WebSocketDisconnect
 
 from voice_dani import audio_handler
 from voice_dani.config import config
+
+
+@pytest.fixture(autouse=True)
+def _isolate_memory(tmp_path, monkeypatch):
+    """Keep tests off the user's real ~/.dani/memory (core.md would leak into prompts)."""
+    from voice_dani import memory
+    monkeypatch.setattr(memory.config.memory, "db_path", str(tmp_path / "dani.db"))
+
 
 # ---------------------------------------------------------------------------
 # Fakes
