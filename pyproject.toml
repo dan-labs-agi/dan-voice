@@ -64,3 +64,6 @@ ignore = ["S101", "B008", "S603", "S607"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "slow: expensive e2e tests (real agent calls) — run explicitly with -m slow",
+]

@@ -43,10 +43,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("Voice Dani server starting...")
     # Start cleanup task
     cleanup_task = asyncio.create_task(_cleanup_loop())
+    # Optional: warm the STT model in a worker thread so the first turn isn't
+    # blocked by the ~20s cold load. Must not block startup.
+    preload_task: asyncio.Task | None = None
+    if config.stt.preload:
+        preload_task = asyncio.create_task(_preload_stt())
     yield
     # Shutdown
     log.info("Voice Dani server shutting down...")
     cleanup_task.cancel()
+    if preload_task:
+        preload_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await preload_task
     # Kill cloudflared tunnel
     global _tunnel_proc
     if _tunnel_proc:
@@ -60,6 +69,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Voice Dani", version="0.2.0", lifespan=lifespan)
+
+
+async def _preload_stt() -> None:
+    """Warm the whisper model off the event loop (model load is blocking CPU)."""
+    try:
+        # Import inside so the STT deps aren't pulled in when preload is off.
+        from .audio_handler import _load_model
+        await asyncio.to_thread(_load_model)
+        log.info("STT model preloaded")
+    except Exception as e:
+        log.warning(f"STT preload failed: {e}")
 
 
 async def _cleanup_loop():

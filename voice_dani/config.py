@@ -22,6 +22,7 @@ class STTConfig:
     compute_type: str = "int8"
     beam_size: int = 5
     vad_filter: bool = False
+    preload: bool = False
 
 
 @dataclass
@@ -89,6 +90,7 @@ class Config:
             stt=STTConfig(
                 model_name=os.getenv("VD_STT_MODEL", "tiny"),
                 device=os.getenv("VD_STT_DEVICE", "cpu"),
+                preload=os.getenv("VD_STT_PRELOAD", "0").lower() in ("1", "true"),
             ),
             tts=TTSConfig(
                 backend=os.getenv("VD_TTS_BACKEND", "auto"),

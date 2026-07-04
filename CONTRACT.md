@@ -1,3 +1,14 @@
+# CONTRACT — Phase 4: Windows-native pipeline (DONE except phone)
+
+- [x] D1 SAPI TTS backend (win32, zero deps), backend order piper→sapi→say
+- [x] D2 Real STT installed + round-trip benchmark beats spec targets (tts=0.31s, stt=0.61s)
+- [x] D3 True WS e2e test: real socket → real STT → real claude → real TTS (test_e2e_ws.py)
+- [x] D4 Whisper preload option VD_STT_PRELOAD (non-blocking startup warm)
+- [x] D5 PR opened (somdipto/dan-voice#1), fork CI green
+- [ ] D6 Phone pass — human required
+
+---
+
 # CONTRACT — Phase 2: Semantic memory, core blocks, reflect, vault
 
 ## Phase 2 assertions

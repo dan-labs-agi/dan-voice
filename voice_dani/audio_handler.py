@@ -111,7 +111,10 @@ async def run_agent(prompt: str, agent: str = "opencode") -> AsyncGenerator[str,
     if agent == "opencode":
         cmd = [bin_path, "run", "--format", "json", prompt]
     elif agent == "claude":
-        cmd = [bin_path, "--print", "--output-format", "stream-json", prompt]
+        # `--output-format stream-json` with `--print` requires `--verbose`
+        # (claude CLI >=2.x errors out otherwise), so the assistant frames
+        # this parser reads actually get emitted.
+        cmd = [bin_path, "--print", "--verbose", "--output-format", "stream-json", prompt]
     else:
         cmd = [bin_path, prompt]
 
@@ -151,14 +154,21 @@ async def run_agent(prompt: str, agent: str = "opencode") -> AsyncGenerator[str,
                 continue
             try:
                 obj = json.loads(text)
-                if agent == "opencode" and obj.get("type") == "text":
-                    t = obj.get("part", {}).get("text", "")
-                    if t:
-                        yield t
-                elif agent == "claude" and obj.get("type") == "assistant":
-                    for block in obj.get("message", {}).get("content", []):
-                        if block.get("type") == "text":
-                            yield block.get("text", "")
+                if agent == "opencode":
+                    if obj.get("type") == "text":
+                        t = obj.get("part", {}).get("text", "")
+                        if t:
+                            yield t
+                    else:
+                        yield text + " "
+                elif agent == "claude":
+                    # Only assistant text blocks are speech. Skip the other
+                    # stream-json protocol frames (system/init, rate_limit,
+                    # result) so TTS never reads the raw JSON aloud.
+                    if obj.get("type") == "assistant":
+                        for block in obj.get("message", {}).get("content", []):
+                            if block.get("type") == "text":
+                                yield block.get("text", "")
                 else:
                     yield text + " "
             except json.JSONDecodeError:
