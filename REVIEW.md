@@ -1,49 +1,33 @@
-# REVIEW — 2026-07-03 — Phase 3: Neural memory, session hooks, error learning
+# REVIEW — 2026-07-04 — Phase 4: Windows-native pipeline + PR + CI live
 
 ## What was built
+- `SapiTTS` backend — Windows built-in speech via PowerShell System.Speech, zero deps, 22050 Hz PCM16, injection-safe (text via temp file). Backend order: piper → sapi (win32) → say (darwin). Server now speaks on Windows (was "No TTS backend available").
+- faster-whisper installed (`stt` extra) — STT real on this box; previously-skipped tests now run.
+- Real no-mock round-trip benchmark (`tests/test_roundtrip.py`).
 
-**dan-voice (`0eba2c8`):**
-- Neural semantic memory: fastembed (bge-small-en-v1.5 quantized, 65MB → `~/.dani/models`) + sqlite-vec KNN in the same `dani.db`. `python -m voice_dani.semantic reindex|search`. Optional extra `semantic`; everything degrades gracefully without it.
-- Session-end hook: `VD_SESSION_END_CMD` spawns any command (detached) after a voice session with ≥1 turn — the auto-reflect cadence answer without hardcoding bun paths into Python.
-- Error learning (Hermes-style): STT failures, agent crashes, timeouts retained as `source="error"` rows — `dani reflect` distills lessons from failures too.
-- Windows bug fixed: Unicode startup box crashed the server on cp1252 consoles (redirected stdout) — found by live smoke, UTF-8 reconfigure in `__main__`.
-- Test-isolation bug fixed: hardening tests read the user's real core.md.
+## Measured performance (real, this box, CPU)
+| Metric | Spec target | Measured |
+|---|---|---|
+| TTS | < 1s / 200 tok | **0.31s** ✅ |
+| STT (warm) | < 2s / 5s utterance | **0.61s** ✅ |
+| Transcription | — | verbatim ✅ |
 
-**dani CLI (`2f09681`):** `dani recall "<q>" --semantic` — bridges to the Python neural search.
+Whisper cold load ~20s first call (model cached; server lazy-loads).
 
-## Live verification (real, not mocked)
-- `dani voice` → server up via bun spawn, `/health` 200, tunnel child spawned. ✓
-- `dani reflect --last 10` with real claude → `reflected: 3 decisions, 1 skills.` — vault notes with `[[core]]`, FTS rows, skill listed. ✓
-- `dani recall "public url" --semantic` → 5 neural rows. ✓
-- Cross-language core.md write/read. ✓
-
-## Gates
-66 passed / 3 skipped, ruff clean. +8 tests this phase.
-
-## Spec scorecard (original success criteria)
-| Criterion | Status |
-|---|---|
-| `dani recall/retain/reflect` across sessions | ✅ live |
-| Auto-generated skills in vault | ✅ via reflect |
-| Obsidian vault | ✅ local vault; bidirectional sync N/A (same files) |
-| Free tier zero config | ✅ FTS5 default, semantic opt-in |
-| Injection scan + file locking + frozen snapshot | ✅ |
-| `dani voice` | ✅ smoke-tested |
-| Google OAuth / Composio / Zen proxy / cloud | ⏸ need external accounts (ASSUMPTIONS.md) |
-| curl install / `dani login` | ⏸ needs hosted endpoint |
-
-## Taste score
-Design 8 · Originality 7 · Craft 8 · Functionality 8 (three live end-to-end proofs this phase).
+## Shipped externally
+- PR open: somdipto/dan-voice#1 (9→11 commits, phases 1-4).
+- Fork CI: **green** (2 successful runs on dani-phases-1-3).
+- dani CLI: dan-labs-agi/dani-cli (private) incl. `dani loop`.
 
 ## Known limitations / debt
-- Semantic index not auto-updated per turn — reindex via session-end hook or manual (documented; model-in-server-RAM tradeoff deliberate).
-- Reflect line-protocol parsing may drift with agent output style — worked live with claude today.
-- CI never run (no push). Phone round-trip untested (needs real phone rig).
+- SAPI voice quality = classic Windows TTS (fine for dev; piper for quality).
+- Round-trip test win32-only — CI (ubuntu) skips it by design.
+- Phone e2e still pending (needs human + phone).
 
 ## 3 questions
-1. Push both repos to GitHub now? (CI lights up, needs remote URLs.)
-2. Phone smoke: you open tunnel URL on phone, speak, verify e2e — schedule?
-3. Next big rock: Composio/OAuth (needs your accounts) vs `dani loop` (autonomous dev loop command) vs polish?
+1. PR #1 to somdipto — leave open, or you ping the owner?
+2. Whisper cold-start: preload model at server boot (+20s startup, instant first turn) or keep lazy (fast boot, slow first turn)? Currently lazy.
+3. Next: phone e2e session, Composio/OAuth (accounts), or `dani loop` self-hosting trial (point it at its own CONTRACT)?
 
 ## Options
-(a) `dani loop` + harness features · (b) push + CI · (c) phone e2e session · (d) Composio/OAuth (bring accounts).
+(a) loop self-host trial · (b) phone e2e (need you) · (c) Composio/OAuth (need accounts) · (d) polish/refactor.
