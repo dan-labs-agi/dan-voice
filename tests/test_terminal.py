@@ -75,21 +75,21 @@ def test_status_hints_reflect_toggles():
 
 
 def test_boxed_input_round_trip(monkeypatch):
-    """Drive the real prompt_toolkit session through a pipe input."""
+    """Drive the real layout-based input app through a pipe input."""
     from prompt_toolkit.input.defaults import create_pipe_input
     from prompt_toolkit.output import DummyOutput
-    from prompt_toolkit.shortcuts import PromptSession
 
     monkeypatch.setattr(terminal.memory, "load_core", lambda: "")
     state = terminal.Session(agent="x", voice=False, speak=False)
     with create_pipe_input() as pipe:
-        monkeypatch.setattr(
-            terminal, "_pt_session", PromptSession(input=pipe, output=DummyOutput())
-        )
+        app, buffer = terminal.build_input_app(state, pt_input=pipe, pt_output=DummyOutput())
+
         pipe.send_text("hello box\n")
-        assert terminal._boxed_input(state) == "hello box"
+        assert app.run() == "hello box"
+
+        buffer.reset()
         pipe.send_text("\x03")  # Ctrl+C → None (quit signal)
-        assert terminal._boxed_input(state) is None
+        assert app.run() is None
 
 
 # ---------------------------------------------------------------------------

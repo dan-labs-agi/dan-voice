@@ -1,9 +1,10 @@
 """dani's interactive terminal session — Claude Code-style REPL.
 
 Text-first: type to chat. Voice input (STT) is opt-in via /voice or --voice;
-spoken replies (TTS) are opt-in via /speak or --speak. Single brand accent
-(#d97757), boxed welcome header with the DANI block-D mark, ❯ prompt,
-● response bullets, ✻ timing lines. Pure stdlib + numpy (+ sounddevice and
+spoken replies (TTS) are opt-in via /speak or --speak. Single violet accent
+(#8b5cf6), full-width boxed welcome header with the DANI block-D mark,
+❯ prompt, ● response bullets, ✻ timing lines, layout-managed input box that
+survives resizes. Pure stdlib + numpy + prompt_toolkit (+ sounddevice and
 faster-whisper only when voice input is used).
 
 Run:  python -m voice_dani.terminal [--voice] [--speak] [--agent <name>]
@@ -32,13 +33,13 @@ from .config import config
 VERSION = "0.1.0"
 
 # ---------------------------------------------------------------------------
-# Brand palette (dani-identity-ui globals.css) — one accent, no rainbow.
+# Palette — dani violet (distinct from claude's orange), one accent only.
 # ---------------------------------------------------------------------------
 
-ACCENT = (217, 119, 87)  # --accent  #d97757
-ACCENT_DIM = (196, 100, 63)  # --accent-dim
-MUTED = (119, 114, 106)  # --muted
-DANGER = (194, 59, 59)  # --danger
+ACCENT = (139, 92, 246)  # violet  #8b5cf6
+ACCENT_DIM = (109, 70, 200)  # deeper violet
+MUTED = (128, 126, 136)  # cool grey
+DANGER = (194, 59, 59)  # --danger (identity-ui)
 
 RESET = "\x1b[0m"
 BOLD = "\x1b[1m"
@@ -136,39 +137,78 @@ def _visible_len(text: str) -> int:
     return n
 
 
+def _fit(line: str, width: int) -> str:
+    """Pad (or truncate) a styled line to exactly ``width`` visible columns."""
+    vis = _visible_len(line)
+    if vis <= width:
+        return line + " " * (width - vis)
+    while _visible_len(line) > max(width - 1, 1):
+        line = line[:-1]
+    # Never leave a clipped escape sequence dangling.
+    esc = line.rfind("\x1b")
+    if esc != -1 and "m" not in line[esc:]:
+        line = line[:esc]
+    return line + "…" + (RESET if _color_enabled() else "")
+
+
+def _center(line: str, width: int) -> str:
+    pad = max(width - _visible_len(line), 0)
+    left = pad // 2
+    return " " * left + line + " " * (pad - left)
+
+
 def print_header(cwd: str) -> None:
+    """Full-width, two-panel welcome box (claude-code style), resize-aware."""
     user = os.getenv("USERNAME") or os.getenv("USER") or "there"
-    info = [
+    width = max(term_width() - 1, 60)
+    inner = width - 2
+
+    left_lines: list[str] = [
+        "",
         bold(f"Welcome back, {user}!"),
         "",
-        "voice · memory · agent loops",
+        *[paint(line, ACCENT) for line in LOGO],
         "",
+        "voice · memory · agent loops",
         dim(cwd),
-        dim("/help for commands"),
+        "",
     ]
-    logo_w = max(len(line) for line in LOGO)
-    rows = max(len(LOGO), len(info))
-    logo_pad = (rows - len(LOGO)) // 2
-    info_pad = (rows - len(info)) // 2
 
-    body: list[str] = []
-    for r in range(rows):
-        logo_line = LOGO[r - logo_pad] if 0 <= r - logo_pad < len(LOGO) else ""
-        info_line = info[r - info_pad] if 0 <= r - info_pad < len(info) else ""
-        left = paint(logo_line.ljust(logo_w), ACCENT)
-        body.append(f"  {left}   {info_line}")
+    right_lines: list[str] = [
+        "",
+        bold(paint("Tips for getting started", ACCENT)),
+        "Type a message and press Enter — dani remembers across sessions.",
+        "Voice input: /voice, then press Enter and speak.",
+        "Spoken replies: /speak · fresh start: /clear · everything: /help",
+        "",
+        bold(paint("What's new", ACCENT)),
+        "One engine behind chat, loops and voice — with memory tools built in.",
+        "Persistent conversations: every session picks up where you left off.",
+        dim("q or Ctrl+C to leave"),
+        "",
+    ]
 
-    width = max(_visible_len(line) for line in body) + 3
+    narrow = width < 96
+    if narrow:
+        body_rows = [_fit("  " + line, inner) for line in left_lines]
+    else:
+        left_w = 40
+        right_w = inner - left_w - 3  # "│ " separator + trailing space
+        rows = max(len(left_lines), len(right_lines))
+        left_lines += [""] * (rows - len(left_lines))
+        right_lines += [""] * (rows - len(right_lines))
+        body_rows = [
+            _center(lft, left_w) + paint("│", MUTED) + " " + _fit(rgt, right_w)
+            for lft, rgt in zip(left_lines, right_lines, strict=True)
+        ]
+
     title = f"─ {bold(paint(f'DANI v{VERSION}', ACCENT))} "
-    rule = paint("─" * max(width - _visible_len(title), 0) + "╮", MUTED)
+    rule = paint("─" * max(width - _visible_len(title) - 2, 0) + "╮", MUTED)
     print()
     print(f"{paint('╭', MUTED)}{title}{rule}")
-    print(f"{paint('│', MUTED)}{' ' * width}{paint('│', MUTED)}")
-    for line in body:
-        pad = " " * max(width - _visible_len(line), 0)
-        print(f"{paint('│', MUTED)}{line}{pad}{paint('│', MUTED)}")
-    print(f"{paint('│', MUTED)}{' ' * width}{paint('│', MUTED)}")
-    print(f"{paint('╰' + '─' * width + '╯', MUTED)}")
+    for row in body_rows:
+        print(f"{paint('│', MUTED)}{_fit(row, inner)}{paint('│', MUTED)}")
+    print(f"{paint('╰' + '─' * inner + '╯', MUTED)}")
     print()
 
 
@@ -178,8 +218,8 @@ def print_header(cwd: str) -> None:
 
 PROMPT = "❯ "
 
-ACCENT_HEX = "#d97757"
-MUTED_HEX = "#77726a"
+ACCENT_HEX = "#8b5cf6"
+MUTED_HEX = "#807e88"
 
 
 def term_width() -> int:
@@ -207,61 +247,109 @@ def status_hints(voice: bool, speak: bool) -> str:
     return "  " + " · ".join(parts)
 
 
-# Lazily-created prompt_toolkit session (input history, arrows, paste). The
-# plain input() path stays for pipes, tests, and machines without a TTY.
-_pt_session = None
+# Layout-based input box: the left/right borders are 1-column windows managed
+# by the layout engine, so alignment is exact at every terminal width and
+# every resize re-renders the whole box. The plain input() path stays for
+# pipes, tests, and machines without a TTY.
+_input_app = None  # cached (app, buffer) for interactive use
 
 
-def _boxed_input(state: Session) -> str | None:
-    """Bordered input box + status line. Returns None on Ctrl+C / Ctrl+D."""
-    global _pt_session
-    from prompt_toolkit import PromptSession
-    from prompt_toolkit.formatted_text import FormattedText
+def build_input_app(state: Session, pt_input=None, pt_output=None):
+    """Build the boxed-input Application. Returns (app, buffer)."""
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.buffer import Buffer
     from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
+    from prompt_toolkit.key_binding.defaults import load_key_bindings
+    from prompt_toolkit.layout import (
+        BufferControl,
+        FormattedTextControl,
+        HSplit,
+        Layout,
+        VSplit,
+        Window,
+    )
     from prompt_toolkit.styles import Style
 
-    if _pt_session is None:
-        histdir = os.path.join(os.path.expanduser("~"), ".dani")
-        os.makedirs(histdir, exist_ok=True)
-        _pt_session = PromptSession(
-            history=FileHistory(os.path.join(histdir, "terminal_history")),
-            reserve_space_for_menu=0,
-            erase_when_done=True,
-        )
+    histdir = os.path.join(os.path.expanduser("~"), ".dani")
+    os.makedirs(histdir, exist_ok=True)
+    buffer = Buffer(
+        multiline=False,
+        history=FileHistory(os.path.join(histdir, "terminal_history")),
+        enable_history_search=True,
+    )
 
-    width = term_width()
-    message = FormattedText(
+    def _rule(left: str, right: str):
+        def render():
+            w = term_width() - 1
+            return [("class:border", left + "─" * max(w - 2, 2) + right)]
+
+        return render
+
+    def _status():
+        return [("class:hint", status_hints(state.voice, state.speak))]
+
+    kb = KeyBindings()
+
+    @kb.add("enter")
+    def _accept(event) -> None:
+        buffer.append_to_history()
+        event.app.exit(result=buffer.text)
+
+    @kb.add("c-c")
+    @kb.add("c-d")
+    def _quit(event) -> None:
+        event.app.exit(result=None)
+
+    input_window = Window(BufferControl(buffer), wrap_lines=True, dont_extend_height=True)
+    body = HSplit(
         [
-            ("class:border", box_top(width) + "\n"),
-            ("class:border", "│ "),
-            ("class:prompt", PROMPT),
+            Window(FormattedTextControl(_rule("╭", "╮")), height=1),
+            VSplit(
+                [
+                    Window(width=1, char="│", style="class:border"),
+                    Window(width=1, char=" "),
+                    Window(width=2, content=FormattedTextControl([("class:prompt", PROMPT)])),
+                    input_window,
+                    Window(width=1, char=" "),
+                    Window(width=1, char="│", style="class:border"),
+                ]
+            ),
+            Window(FormattedTextControl(_rule("╰", "╯")), height=1),
+            Window(FormattedTextControl(_status), height=1),
         ]
     )
-    toolbar = FormattedText(
-        [
-            ("class:border", box_bottom(width) + "\n"),
-            ("class:hint", status_hints(state.voice, state.speak)),
-        ]
-    )
+
     style = Style.from_dict(
         {
             "border": MUTED_HEX,
             "prompt": f"{ACCENT_HEX} bold",
             "hint": MUTED_HEX,
-            "bottom-toolbar": "noreverse",
         }
         if _color_enabled()
-        else {"bottom-toolbar": "noreverse"}
+        else {}
     )
-    try:
-        return _pt_session.prompt(
-            message,
-            rprompt=FormattedText([("class:border", "│")]),
-            bottom_toolbar=toolbar,
-            style=style,
-        )
-    except (EOFError, KeyboardInterrupt):
-        return None
+
+    app = Application(
+        layout=Layout(body, focused_element=input_window),
+        key_bindings=merge_key_bindings([load_key_bindings(), kb]),
+        style=style,
+        erase_when_done=True,
+        mouse_support=False,
+        input=pt_input,
+        output=pt_output,
+    )
+    return app, buffer
+
+
+def _boxed_input(state: Session) -> str | None:
+    """Bordered input box + status line. Returns None on Ctrl+C / Ctrl+D."""
+    global _input_app
+    if _input_app is None:
+        _input_app = build_input_app(state)
+    app, buffer = _input_app
+    buffer.reset()
+    return app.run()
 
 
 def use_boxed_input() -> bool:
