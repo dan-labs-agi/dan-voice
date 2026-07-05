@@ -178,9 +178,100 @@ def print_header(cwd: str) -> None:
 
 PROMPT = "❯ "
 
+ACCENT_HEX = "#d97757"
+MUTED_HEX = "#77726a"
+
 
 def term_width() -> int:
     return shutil.get_terminal_size((100, 24)).columns
+
+
+def box_top(width: int) -> str:
+    return "╭" + "─" * max(width - 2, 2) + "╮"
+
+
+def box_bottom(width: int) -> str:
+    return "╰" + "─" * max(width - 2, 2) + "╯"
+
+
+def status_hints(voice: bool, speak: bool) -> str:
+    """One dim line under the input box, claude-code style."""
+    parts = [
+        f"voice {'on' if voice else 'off'} (/voice)",
+        f"speak {'on' if speak else 'off'} (/speak)",
+        "/help",
+        "q to quit",
+    ]
+    if voice:
+        parts.insert(0, "Enter = speak")
+    return "  " + " · ".join(parts)
+
+
+# Lazily-created prompt_toolkit session (input history, arrows, paste). The
+# plain input() path stays for pipes, tests, and machines without a TTY.
+_pt_session = None
+
+
+def _boxed_input(state: Session) -> str | None:
+    """Bordered input box + status line. Returns None on Ctrl+C / Ctrl+D."""
+    global _pt_session
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.formatted_text import FormattedText
+    from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.styles import Style
+
+    if _pt_session is None:
+        histdir = os.path.join(os.path.expanduser("~"), ".dani")
+        os.makedirs(histdir, exist_ok=True)
+        _pt_session = PromptSession(
+            history=FileHistory(os.path.join(histdir, "terminal_history")),
+            reserve_space_for_menu=0,
+            erase_when_done=True,
+        )
+
+    width = term_width()
+    message = FormattedText(
+        [
+            ("class:border", box_top(width) + "\n"),
+            ("class:border", "│ "),
+            ("class:prompt", PROMPT),
+        ]
+    )
+    toolbar = FormattedText(
+        [
+            ("class:border", box_bottom(width) + "\n"),
+            ("class:hint", status_hints(state.voice, state.speak)),
+        ]
+    )
+    style = Style.from_dict(
+        {
+            "border": MUTED_HEX,
+            "prompt": f"{ACCENT_HEX} bold",
+            "hint": MUTED_HEX,
+            "bottom-toolbar": "noreverse",
+        }
+        if _color_enabled()
+        else {"bottom-toolbar": "noreverse"}
+    )
+    try:
+        return _pt_session.prompt(
+            message,
+            rprompt=FormattedText([("class:border", "│")]),
+            bottom_toolbar=toolbar,
+            style=style,
+        )
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+
+def use_boxed_input() -> bool:
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    try:
+        import prompt_toolkit  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def print_response(text: str) -> None:
@@ -456,15 +547,27 @@ class Session:
             parts.append(token)
         return "".join(parts)
 
+    def read_input(self) -> str | None:
+        """Boxed input on a real terminal; plain prompt for pipes/tests."""
+        if not use_boxed_input():
+            try:
+                return input(paint(PROMPT, ACCENT))
+            except (EOFError, KeyboardInterrupt):
+                return None
+        raw = _boxed_input(self)
+        if raw is not None and raw.strip():
+            # The box erases itself on submit; echo claude-code-style history.
+            print(f"{paint(PROMPT, ACCENT)}{raw.strip()}")
+        return raw
+
     def run(self) -> int:
         print_header(os.getcwd())
         if self.voice:
             self.status("voice input on — press Enter at the prompt to speak")
 
         while True:
-            try:
-                raw = input(paint(PROMPT, ACCENT))
-            except (EOFError, KeyboardInterrupt):
+            raw = self.read_input()
+            if raw is None:
                 print()
                 break
 

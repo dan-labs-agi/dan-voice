@@ -8,13 +8,16 @@ import json
 import numpy as np
 import pytest
 
-from voice_dani import audio_handler
+from voice_dani import audio_handler, terminal
 from voice_dani.terminal import (
     RMS_FLOOR,
     SPEECH_FACTOR,
+    box_bottom,
+    box_top,
     gradient,
     rms,
     speech_threshold,
+    status_hints,
     wave_bars,
 )
 
@@ -56,6 +59,37 @@ def test_wave_bars_clamps_out_of_range():
 def test_gradient_plain_when_not_tty():
     # pytest captures stdout (not a tty) → gradient must be a no-op.
     assert gradient("hello") == "hello"
+
+
+def test_box_borders_match_width():
+    assert box_top(10) == "╭────────╮"
+    assert box_bottom(10) == "╰────────╯"
+    assert len(box_top(80)) == 80
+
+
+def test_status_hints_reflect_toggles():
+    off = status_hints(voice=False, speak=False)
+    assert "voice off" in off and "speak off" in off and "Enter = speak" not in off
+    on = status_hints(voice=True, speak=True)
+    assert "voice on" in on and "speak on" in on and on.strip().startswith("Enter = speak")
+
+
+def test_boxed_input_round_trip(monkeypatch):
+    """Drive the real prompt_toolkit session through a pipe input."""
+    from prompt_toolkit.input.defaults import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+    from prompt_toolkit.shortcuts import PromptSession
+
+    monkeypatch.setattr(terminal.memory, "load_core", lambda: "")
+    state = terminal.Session(agent="x", voice=False, speak=False)
+    with create_pipe_input() as pipe:
+        monkeypatch.setattr(
+            terminal, "_pt_session", PromptSession(input=pipe, output=DummyOutput())
+        )
+        pipe.send_text("hello box\n")
+        assert terminal._boxed_input(state) == "hello box"
+        pipe.send_text("\x03")  # Ctrl+C → None (quit signal)
+        assert terminal._boxed_input(state) is None
 
 
 # ---------------------------------------------------------------------------
