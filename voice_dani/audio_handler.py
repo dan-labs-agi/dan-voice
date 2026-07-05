@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -100,8 +101,17 @@ def tts(text: str, voice: str = "Samantha") -> bytes:
 # Agent CLI runner
 # ---------------------------------------------------------------------------
 
-async def run_agent(prompt: str, agent: str = "opencode") -> AsyncGenerator[str, None]:
-    """Run CLI agent and yield response tokens."""
+async def run_agent(
+    prompt: str, agent: str = "opencode", session: dict | None = None
+) -> AsyncGenerator[str, None]:
+    """Run CLI agent and yield response tokens.
+
+    ``session`` (opencode only) is a mutable dict carrying conversation state:
+    when it holds an ``id`` the run continues that opencode session; when the
+    id is empty, the first event's sessionID is captured into it so the next
+    utterance shares context. DANI_SERVER_URL attaches to a running
+    ``opencode serve`` instead of cold-starting a process-local one.
+    """
     bins = {"opencode": "opencode", "claude": "claude", "codex": "codex", "grok": "grok"}
     bin_path = shutil.which(bins.get(agent, agent))
     if not bin_path:
@@ -109,7 +119,16 @@ async def run_agent(prompt: str, agent: str = "opencode") -> AsyncGenerator[str,
         return
 
     if agent == "opencode":
-        cmd = [bin_path, "run", "--format", "json", prompt]
+        cmd = [bin_path, "run", "--format", "json"]
+        model = os.getenv("DANI_MODEL", "")
+        if model:
+            cmd += ["-m", model]
+        server = os.getenv("DANI_SERVER_URL", "")
+        if server:
+            cmd += ["--attach", server]
+        if session and session.get("id"):
+            cmd += ["--session", str(session["id"])]
+        cmd.append(prompt)
     elif agent == "claude":
         # `--output-format stream-json` with `--print` requires `--verbose`
         # (claude CLI >=2.x errors out otherwise), so the assistant frames
@@ -155,6 +174,9 @@ async def run_agent(prompt: str, agent: str = "opencode") -> AsyncGenerator[str,
             try:
                 obj = json.loads(text)
                 if agent == "opencode":
+                    sid = obj.get("sessionID")
+                    if session is not None and sid and not session.get("id"):
+                        session["id"] = sid
                     if obj.get("type") == "text":
                         t = obj.get("part", {}).get("text", "")
                         if t:
@@ -225,6 +247,9 @@ async def handle_audio(ws: WebSocket, agent: str = "opencode") -> None:
 
     agent_task: asyncio.Task | None = None
     history: list[tuple[str, str]] = []
+    # Persistent opencode session for this connection: once run_agent captures
+    # an id, later utterances continue that session server-side.
+    session: dict = {}
 
     # Frozen core-memory snapshot (CONTRACT C3): read once at connection start
     # so mid-session core.md edits never affect the live session.
@@ -289,8 +314,12 @@ async def handle_audio(ws: WebSocket, agent: str = "opencode") -> None:
             await ws.send_json({"type": "transcript", "text": text})
             await ws.send_json({"type": "state", "value": "responding"})
 
-            # Build prompt with recent conversation history (last 6 turns)
-            if history:
+            # With a live opencode session the server already holds the
+            # conversation — send only the new utterance. Otherwise fall back
+            # to prompt-stuffed history (works for every agent).
+            if session.get("id"):
+                prompt = text
+            elif history:
                 lines = ["Previous conversation:"]
                 for u, a in history[-6:]:
                     lines.append(f"user: {u}")
@@ -302,13 +331,14 @@ async def handle_audio(ws: WebSocket, agent: str = "opencode") -> None:
                 prompt = text
 
             # Prepend the frozen core-memory snapshot before everything else.
-            if core_snapshot:
+            # A live opencode session already saw it on its first turn.
+            if core_snapshot and not session.get("id"):
                 prompt = f"Core memory:\n{core_snapshot}\n\n{prompt}"
 
             # Run agent (track as task so we can cancel on barge-in)
             response_parts = []
             async def _run_and_collect(prompt=prompt, parts=response_parts):
-                async for token in run_agent(prompt, agent):
+                async for token in run_agent(prompt, agent, session=session):
                     parts.append(token)
             agent_task = asyncio.create_task(_run_and_collect())
             try:

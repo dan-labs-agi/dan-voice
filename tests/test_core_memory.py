@@ -54,7 +54,7 @@ class TestFrozenSnapshot:
 
         prompts: list[str] = []
 
-        async def fake_run_agent(prompt, agent="opencode"):
+        async def fake_run_agent(prompt, agent="opencode", session=None):
             prompts.append(prompt)
             # Mutate core mid-session — must NOT appear in later prompts
             memory.set_core_block("persona", "MUTATED-V2")
@@ -102,7 +102,7 @@ class TestFrozenSnapshot:
 
         prompts: list[str] = []
 
-        async def fake_run_agent(prompt, agent="opencode"):
+        async def fake_run_agent(prompt, agent="opencode", session=None):
             prompts.append(prompt)
             yield "ok"
 

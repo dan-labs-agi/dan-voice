@@ -109,7 +109,7 @@ def _patch_pipeline(monkeypatch, transcripts, prompts, retained):
     monkeypatch.setattr(audio_handler, "transcribe", lambda audio: script.pop(0))
     monkeypatch.setattr(audio_handler, "tts", lambda text, voice="Samantha": b"")
 
-    async def _fake_run_agent(prompt, agent="opencode"):
+    async def _fake_run_agent(prompt, agent="opencode", session=None):
         prompts.append(prompt)
         yield "ok"
 
