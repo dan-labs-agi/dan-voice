@@ -177,12 +177,17 @@ async def run_agent(
                     sid = obj.get("sessionID")
                     if session is not None and sid and not session.get("id"):
                         session["id"] = sid
+                    # Only text parts are speech; protocol frames
+                    # (step_start/step_finish/tool) are dropped so TTS never
+                    # reads raw JSON aloud. Errors surface as a short marker.
                     if obj.get("type") == "text":
                         t = obj.get("part", {}).get("text", "")
                         if t:
                             yield t
-                    else:
-                        yield text + " "
+                    elif obj.get("type") == "error":
+                        err = obj.get("error", {})
+                        msg = err.get("data", {}).get("message") or err.get("name", "unknown")
+                        yield f"[agent error: {msg}]"
                 elif agent == "claude":
                     # Only assistant text blocks are speech. Skip the other
                     # stream-json protocol frames (system/init, rate_limit,
