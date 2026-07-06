@@ -19,6 +19,7 @@ import contextlib
 import itertools
 import os
 import shutil
+import subprocess
 import sys
 import textwrap
 import threading
@@ -248,6 +249,7 @@ def status_hints(voice: bool, speak: bool) -> str:
 COMMANDS = {
     "/voice": "toggle voice input — Enter at the empty prompt speaks",
     "/speak": "toggle spoken replies",
+    "/glow": "toggle glamorous markdown rendering of replies",
     "/clear": "start a fresh conversation",
     "/help": "list commands",
     "/quit": "leave the session",
@@ -418,6 +420,29 @@ def use_boxed_input() -> bool:
     except ImportError:
         return False
     return True
+
+
+GLOW_TIMEOUT_SECS = 8
+
+
+def render_markdown(text: str, width: int) -> str | None:
+    """ANSI-rendered markdown via charm's glow; None when unavailable/failed
+    (caller falls back to the plain renderer)."""
+    glow = shutil.which("glow")
+    if glow is None:
+        return None
+    try:
+        proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
+            [glow, "-s", "dark", "-w", str(max(min(width, 110), 40)), "-"],
+            input=text.encode("utf-8"),
+            capture_output=True,
+            timeout=GLOW_TIMEOUT_SECS,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    return proc.stdout.decode("utf-8", errors="replace")
 
 
 def print_response(text: str) -> None:
@@ -598,6 +623,8 @@ class Session:
         self.agent = agent
         self.voice = voice
         self.speak = speak
+        # Markdown replies render through glow automatically when installed.
+        self.glow = shutil.which("glow") is not None
         self.session: dict = {}
         self.core_snapshot = memory.load_core()
         self.turns = 0
@@ -622,6 +649,12 @@ class Session:
         elif cmd == "/speak":
             self.speak = not self.speak
             self.status("spoken replies on" if self.speak else "spoken replies off")
+        elif cmd == "/glow":
+            if not self.glow and shutil.which("glow") is None:
+                self.status("glow not found — install: winget install charmbracelet.glow")
+                return True
+            self.glow = not self.glow
+            self.status("glamorous markdown on" if self.glow else "plain rendering")
         elif cmd == "/clear":
             self.session = {}
             self.turns = 0
@@ -665,7 +698,14 @@ class Session:
             print(f"{paint('●', DANGER)} no response — try again (/help for commands)")
             return
 
-        print_response(response)
+        rendered = None
+        if self.glow and _color_enabled() and not response.startswith("[agent"):
+            rendered = render_markdown(response, term_width() - 2)
+        if rendered is not None:
+            print(paint("●", ACCENT))
+            print(rendered.rstrip("\n"))
+        else:
+            print_response(response)
         print(dim(f"✻ Worked for {think.elapsed()}s"))
         print()
 

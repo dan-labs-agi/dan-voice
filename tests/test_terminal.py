@@ -74,6 +74,39 @@ def test_status_hints_reflect_toggles():
     assert "voice on" in on and "speak on" in on and on.strip().startswith("Enter = speak")
 
 
+def test_render_markdown_none_without_glow(monkeypatch):
+    monkeypatch.setattr(terminal.shutil, "which", lambda _n: None)
+    assert terminal.render_markdown("# hi", 80) is None
+
+
+def test_render_markdown_uses_glow(monkeypatch):
+    class FakeProc:
+        returncode = 0
+        stdout = b"PRETTY OUTPUT"
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return FakeProc()
+
+    monkeypatch.setattr(terminal.shutil, "which", lambda _n: "C:/tools/glow.exe")
+    monkeypatch.setattr(terminal.subprocess, "run", fake_run)
+    assert terminal.render_markdown("# hi", 80) == "PRETTY OUTPUT"
+    assert captured["cmd"][0] == "C:/tools/glow.exe"
+    assert "-w" in captured["cmd"]
+
+
+def test_render_markdown_falls_back_on_failure(monkeypatch):
+    class FakeProc:
+        returncode = 1
+        stdout = b""
+
+    monkeypatch.setattr(terminal.shutil, "which", lambda _n: "C:/tools/glow.exe")
+    monkeypatch.setattr(terminal.subprocess, "run", lambda *a, **k: FakeProc())
+    assert terminal.render_markdown("# hi", 80) is None
+
+
 def test_slash_completer_suggests_commands():
     from prompt_toolkit.document import Document
 
