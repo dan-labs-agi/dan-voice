@@ -74,6 +74,18 @@ def test_status_hints_reflect_toggles():
     assert "voice on" in on and "speak on" in on and on.strip().startswith("Enter = speak")
 
 
+def test_slash_completer_suggests_commands():
+    from prompt_toolkit.document import Document
+
+    completer = terminal.build_slash_completer()
+    texts = [c.text for c in completer.get_completions(Document("/"), None)]
+    assert texts == list(terminal.COMMANDS)
+    texts = [c.text for c in completer.get_completions(Document("/vo"), None)]
+    assert texts == ["/voice"]
+    # No suggestions for normal chat text.
+    assert list(completer.get_completions(Document("hello"), None)) == []
+
+
 def test_boxed_input_round_trip(monkeypatch):
     """Drive the real layout-based input app through a pipe input."""
     from prompt_toolkit.input.defaults import create_pipe_input

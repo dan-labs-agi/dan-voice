@@ -247,6 +247,16 @@ def status_hints(voice: bool, speak: bool) -> str:
     return "  " + " · ".join(parts)
 
 
+# Slash commands surfaced by the autocomplete menu (and /help).
+COMMANDS = {
+    "/voice": "toggle voice input — Enter at the empty prompt speaks",
+    "/speak": "toggle spoken replies",
+    "/clear": "start a fresh conversation",
+    "/help": "list commands",
+    "/quit": "leave the session",
+}
+
+
 # Layout-based input box: the left/right borders are 1-column windows managed
 # by the layout engine, so alignment is exact at every terminal width and
 # every resize re-renders the whole box. The plain input() path stays for
@@ -254,10 +264,32 @@ def status_hints(voice: bool, speak: bool) -> str:
 _input_app = None  # cached (app, buffer) for interactive use
 
 
+def build_slash_completer():
+    """Suggestions dropdown for /commands, claude-code style."""
+    from prompt_toolkit.completion import Completer, Completion
+
+    class SlashCompleter(Completer):
+        def get_completions(self, document, complete_event):
+            text = document.text_before_cursor
+            if not text.startswith("/"):
+                return
+            for cmd, desc in COMMANDS.items():
+                if cmd.startswith(text.lower()):
+                    yield Completion(
+                        cmd,
+                        start_position=-len(text),
+                        display=cmd,
+                        display_meta=desc,
+                    )
+
+    return SlashCompleter()
+
+
 def build_input_app(state: Session, pt_input=None, pt_output=None):
     """Build the boxed-input Application. Returns (app, buffer)."""
     from prompt_toolkit.application import Application
     from prompt_toolkit.buffer import Buffer
+    from prompt_toolkit.filters import completion_is_selected
     from prompt_toolkit.history import FileHistory
     from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
     from prompt_toolkit.key_binding.defaults import load_key_bindings
@@ -269,6 +301,7 @@ def build_input_app(state: Session, pt_input=None, pt_output=None):
         VSplit,
         Window,
     )
+    from prompt_toolkit.layout.menus import CompletionsMenu
     from prompt_toolkit.styles import Style
 
     histdir = os.path.join(os.path.expanduser("~"), ".dani")
@@ -277,6 +310,8 @@ def build_input_app(state: Session, pt_input=None, pt_output=None):
         multiline=False,
         history=FileHistory(os.path.join(histdir, "terminal_history")),
         enable_history_search=True,
+        completer=build_slash_completer(),
+        complete_while_typing=True,
     )
 
     def _rule(left: str, right: str):
@@ -291,7 +326,12 @@ def build_input_app(state: Session, pt_input=None, pt_output=None):
 
     kb = KeyBindings()
 
-    @kb.add("enter")
+    @kb.add("enter", filter=completion_is_selected)
+    def _apply_completion(event) -> None:
+        b = event.current_buffer
+        b.apply_completion(b.complete_state.current_completion)
+
+    @kb.add("enter", filter=~completion_is_selected)
     def _accept(event) -> None:
         buffer.append_to_history()
         event.app.exit(result=buffer.text)
@@ -317,6 +357,8 @@ def build_input_app(state: Session, pt_input=None, pt_output=None):
             ),
             Window(FormattedTextControl(_rule("╰", "╯")), height=1),
             Window(FormattedTextControl(_status), height=1),
+            # Auto-hides unless completions are active (typing a /command).
+            CompletionsMenu(max_height=len(COMMANDS) + 1, scroll_offset=0),
         ]
     )
 
@@ -325,6 +367,11 @@ def build_input_app(state: Session, pt_input=None, pt_output=None):
             "border": MUTED_HEX,
             "prompt": f"{ACCENT_HEX} bold",
             "hint": MUTED_HEX,
+            "completion-menu": "bg:#2a2438 #d4d4d8",
+            "completion-menu.completion": "bg:#2a2438 #d4d4d8",
+            "completion-menu.completion.current": f"bg:{ACCENT_HEX} #ffffff bold",
+            "completion-menu.meta.completion": f"bg:#2a2438 {MUTED_HEX}",
+            "completion-menu.meta.completion.current": f"bg:{ACCENT_HEX} #f4f0ff",
         }
         if _color_enabled()
         else {}
@@ -529,12 +576,10 @@ def play_pcm16(pcm: bytes, rate: int) -> None:
 # Session loop
 # ---------------------------------------------------------------------------
 
-HELP = """\
-/voice     toggle voice input (press Enter at the prompt to speak)
-/speak     toggle spoken replies
-/clear     start a fresh conversation
-/help      this list
-/quit      leave (also: q, exit, Ctrl+C)"""
+def _help_text() -> str:
+    lines = [f"{cmd:<10} {desc}" for cmd, desc in COMMANDS.items()]
+    lines.append("type / to see these as suggestions · q, exit, Ctrl+C also quit")
+    return "\n".join(lines)
 
 
 class Session:
@@ -554,7 +599,7 @@ class Session:
         if cmd in ("/quit", "/exit", "q", "exit", "quit"):
             return False
         if cmd == "/help":
-            for line in HELP.splitlines():
+            for line in _help_text().splitlines():
                 print(f"  {dim(line)}")
         elif cmd == "/voice":
             self.voice = not self.voice
