@@ -109,17 +109,15 @@ def enable_vt() -> None:
 # ---------------------------------------------------------------------------
 
 LOGO = (
-    "      ▄▄▄▄▄▄▄▄▄▄▄     ",
-    "      ███████████▄    ",
-    "     ▄██████████████▄ ",
-    " █████▀        ▀█████ ",
-    " █████          █████ ",
-    " ▀▀▀▀▀▄▄▄▄▄     █████ ",
-    "      █████     █████ ",
-    "     ▄█████    ▄█████ ",
-    " █████▀    █████▀     ",
-    " █████     █████      ",
-    " ▀▀▀▀▀     ▀▀▀▀▀      ",
+    "     ▄▄▄▄▄▄▄▄▄    ",
+    "     ███████████  ",
+    " ▄▄▄█▀▀▀▀▀▀▀▀████ ",
+    " ████        ████ ",
+    " ▀▀▀▀▄▄▄▄    ████ ",
+    "     ████    ████ ",
+    " ▄▄▄██▀▀▀▄▄▄██▀▀▀ ",
+    " ████    ████     ",
+    " ▀▀▀▀    ▀▀▀▀     ",
 )
 
 
@@ -164,35 +162,34 @@ def print_header(cwd: str) -> None:
     inner = width - 2
 
     left_lines: list[str] = [
-        "",
         bold(f"Welcome back, {user}!"),
         "",
         *[paint(line, ACCENT) for line in LOGO],
         "",
         "voice · memory · agent loops",
         dim(cwd),
-        "",
     ]
 
     right_lines: list[str] = [
-        "",
         bold(paint("Tips for getting started", ACCENT)),
         "Type a message and press Enter — dani remembers across sessions.",
         "Voice input: /voice, then press Enter and speak.",
         "Spoken replies: /speak · fresh start: /clear · everything: /help",
         "",
         bold(paint("What's new", ACCENT)),
-        "One engine behind chat, loops and voice — with memory tools built in.",
-        "Persistent conversations: every session picks up where you left off.",
-        dim("q or Ctrl+C to leave"),
+        "One engine behind chat, loops and voice — memory tools built in.",
+        "Persistent conversations: sessions pick up where you left off.",
+        "Connect your Claude account: dani auth login",
         "",
+        "",
+        dim("q or Ctrl+C to leave"),
     ]
 
     narrow = width < 96
     if narrow:
         body_rows = [_fit("  " + line, inner) for line in left_lines]
     else:
-        left_w = 40
+        left_w = 32
         right_w = inner - left_w - 3  # "│ " separator + trailing space
         rows = max(len(left_lines), len(right_lines))
         left_lines += [""] * (rows - len(left_lines))
@@ -377,12 +374,26 @@ def build_input_app(state: Session, pt_input=None, pt_output=None):
         else {}
     )
 
+    # Zooming/resizing reflows the terminal buffer and strands stale border
+    # lines the renderer can no longer track. On any width change, wipe and
+    # repaint the visible screen (history stays in scrollback). The refresh
+    # tick makes this fire even when no key is pressed.
+    last_width = [term_width()]
+
+    def _before_render(application) -> None:
+        w = term_width()
+        if w != last_width[0]:
+            last_width[0] = w
+            application.renderer.clear()
+
     app = Application(
         layout=Layout(body, focused_element=input_window),
         key_bindings=merge_key_bindings([load_key_bindings(), kb]),
         style=style,
         erase_when_done=True,
         mouse_support=False,
+        refresh_interval=0.25,
+        before_render=_before_render,
         input=pt_input,
         output=pt_output,
     )
