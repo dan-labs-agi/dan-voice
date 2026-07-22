@@ -1,0 +1,74 @@
+# Target: Seeed XIAO ESP32-S3
+CONFIG_IDF_TARGET="esp32s3"
+
+# Flash: XIAO ESP32-S3 has 8MB flash
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+
+# Console: XIAO ESP32-S3 has no UART-USB bridge chip; USB D+/D- go straight
+# to the S3's built-in USB-Serial-JTAG controller.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# PSRAM — required by the camera_streamer component's frame buffers
+# (CAM_FB_LOCATION = CAMERA_FB_IN_PSRAM in config.h). XIAO ESP32-S3 has
+# 8MB Octal SPI PSRAM (confirmed via esptool's chip-detect line during
+# Phase 6 flashing: "Embedded PSRAM 8MB").
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+
+#
+# Wi-Fi — camera_streamer streams over a TCP socket on the STA interface.
+#
+CONFIG_ESP_WIFI_ENABLED=y
+
+#
+# Wi-Fi / Bluetooth radio coexistence — camera streaming and BLE
+# provisioning are both active simultaneously on this board (see
+# CLAUDE.md's "Out-of-scope addition" section), sharing the single
+# 2.4GHz radio via ESP-IDF's software coexistence.
+#
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+
+#
+# Partition table — the default single-factory-app table only reserves
+# ~1MB, not enough once the native Wi-Fi station stack + esp32-camera
+# driver stack on top of the existing BLE image (Phase 6 alone was
+# already 486KB / 54% of that 1MB). See partitions.csv for the actual
+# layout (2MB factory app on the real 8MB flash — provisional pending a
+# real idf.py build size report).
+#
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+#
+# Bluetooth / NimBLE
+#
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=n
+CONFIG_BT_NIMBLE_ENABLED=y
+
+# Force LE Secure Connections only — disable legacy pairing fallback so a
+# peer that doesn't support SC can't downgrade the pairing method.
+CONFIG_BT_NIMBLE_SM_SC=y
+CONFIG_BT_NIMBLE_SM_LEGACY=n
+
+# SC_ONLY (Security Mode 1 Level 4) requires an *authenticated* link, which
+# needs a MITM-protected association method (Passkey Entry / Numeric
+# Comparison / OOB) — none of which this board can do with sm_mitm=0 and no
+# display/keyboard (see main.c). Level 4 is unreachable with Just Works, so
+# enforcing SC_ONLY here made every _ENC/_AUTHEN/_AUTHOR GATT operation fail
+# permanently (NimBLE's ble_att_svr_check_perms() demands authenticated when
+# sm_sc_only is set, regardless of which flag the characteristic uses) — this
+# was a latent bug since Phase 6, only surfaced in Phase 7 once a real
+# WRITE_ENC operation was first exercised. Left off (0, the Kconfig default)
+# so Level 3 (SC encryption, unauthenticated) — the actual max this device
+# can reach — is what gets enforced.
+CONFIG_BT_NIMBLE_SM_SC_ONLY=0
+
+# Bonding: keep NVS persistence at its default (n) so bonding keys live
+# only in NimBLE's RAM store (ble_store_ram.c), never NVS — matches
+# "reboot forces re-provisioning" from the architecture doc. Do not set
+# this to y.
+# CONFIG_BT_NIMBLE_NVS_PERSIST=n

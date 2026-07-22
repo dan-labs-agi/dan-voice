@@ -1,0 +1,14 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Cloudflare tunnel config (contains real tunnel ID / hostname; credentials
+# file itself lives in ~/.cloudflared/, never in the repo)
+cloudflared/config.yml

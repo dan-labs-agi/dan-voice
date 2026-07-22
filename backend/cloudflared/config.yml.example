@@ -1,0 +1,9 @@
+tunnel: <TUNNEL_UUID>
+credentials-file: <path-to-home>/.cloudflared/<TUNNEL_UUID>.json
+
+ingress:
+  - hostname: <subdomain>.<yourdomain.com>
+    service: http://127.0.0.1:8000
+  - hostname: <web-subdomain>.<yourdomain.com>
+    service: http://127.0.0.1:3000
+  - service: http_status:404

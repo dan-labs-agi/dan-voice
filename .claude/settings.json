@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run *)",
+      "Bash(opencode --version)",
+      "Bash(opencode serve *)",
+      "Bash(echo \"PID=$!\")",
+      "Read(//tmp/**)",
+      "Bash(echo \"opencode PID=$!\")",
+      "Bash(curl -s -o /dev/null -w \"opencode HTTP %{http_code}\\\\n\" http://127.0.0.1:4096/doc)",
+      "Bash(VC_TUNNEL_HOSTNAME=x VC_WEB_HOSTNAME=x nohup uv run uvicorn voice_cowork_backend.main:app --port 8124)",
+      "Bash(echo \"backend PID=$!\")",
+      "Bash(curl -s -o /dev/null -w \"backend HTTP %{http_code}\\\\n\" http://127.0.0.1:8124/health)",
+      "Bash(curl -s http://127.0.0.1:4096/config/providers -o providers3.json)"
+    ]
+  }
+}
