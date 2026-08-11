@@ -176,6 +176,7 @@ cd web
 npm install
 npm run dev                     # dev server
 npm run build                   # production build
+#nice
 ```
 
 ---
@@ -197,3 +198,4 @@ npm run build                   # production build
 ## License
 
 MIT
+
