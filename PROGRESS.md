@@ -3293,3 +3293,286 @@ Restarted cleanly; new PIN, tunnel confirmed healthy immediately after.
 unexplained recurring live-session interruption (now at least twice
 independent of anything traceable to this session's own actions) —
 worth investigating with real log retention if it recurs again.
+
+## Phase 8 plan approved + Kokoro local TTS shipped (2026-08-09)
+
+### Research / architecture (approved by user, no code yet for 8b-8e)
+
+Researched the open-source STT/TTS landscape and produced a 5-phase
+low-latency plan (targets: first STT partial ~300ms, final text ~1s
+after end-of-speech, TTS first chunk ~200-400ms):
+
+- **8a Kokoro TTS** (this entry) — Kokoro-82M via `kokoro-onnx` as the
+  new default local engine. **SHIPPED, verified.**
+- **8b Streaming STT** — sherpa-onnx streaming zipformer (partial
+  results as audio arrives) + Silero VAD, new `/audio/transcribe/stream`
+  endpoint (chunked PCM in, SSE partials out). Keep pywhispercpp as the
+  full-clip path.
+- **8c ESP32 audio + API** — firmware I2S PDM RX (XIAO Sense has an
+  onboard PDM mic: GPIO41 DATA / GPIO42 CLK, confirmed via
+  esp-cpp's XIAO Sense BSP; it already streams L16 PCM at 16kHz alongside
+  MJPEG on this exact board) → 16kHz S16LE PCM over TCP to a
+  device-token-authed backend endpoint wired into 8b. Also restores
+  `camera_streamer_start()` — must survive Wi-Fi+BLE+camera+mic
+  coexistence. **Caveat: the PDM mic is near-field; arm's-length voice
+  may be quiet — phone mic is the reliable STT source, ESP32 mic for
+  ambient/nearby.**
+- **8d CLI wiring** — `--tts`/`--stt` flags, model preload at boot.
+- **8e E2E + latency measurement** — instrument per-hop timings, tune.
+
+TTS model comparison: Kokoro (82M, tops open leaderboards, mature) chosen
+as primary; Kyutai Pocket TTS (100M, ~200ms first audio, ~6x realtime,
+MIT, 5s voice cloning) flagged as the latency alternative to evaluate;
+KittenTTS deferred (developer preview, API will churn). Deepgram stays as
+the high-quality cloud option; pyttsx3 stays as a fallback.
+
+Estimates (realistic / harsh): 8a 1-2d/4d, 8b 3-5d/10d, 8c 4-6d/12d,
+8d 1-2d/3d, 8e 2-3d/5d → **~2-3 weeks realistic, ~5 weeks harsh.**
+
+### What was built (Phase 8a)
+
+- `pyproject.toml`: added `kokoro-onnx>=0.5.0` (pulls onnxruntime,
+  numpy, misaki[en]/espeakng-loader for G2P).
+- `config.py`: `tts_engine` now `Literal["kokoro", "pyttsx3", "deepgram"]`
+  with **`kokoro` as the new default** (was pyttsx3). New
+  `kokoro_model_dir` (default `~/.dani/models/kokoro`, mirroring the
+  `~/.dani` binaries convention), `kokoro_voice` (default `af_sarah`),
+  `kokoro_lang` (default `en-us`), `kokoro_speed` (default `1.0`).
+- `audio_driver.py`:
+  - `_KOKORO_URLS` + `_ensure_kokoro_model_files()` — auto-downloads
+    `kokoro-v1.0.onnx` (325MB) + `voices-v1.0.bin` (28MB) from
+    kokoro-onnx's GitHub release on first use, cached under the model
+    dir (mirrors pywhispercpp's auto-download). URLs verified reachable
+    (HEAD 200, correct sizes) before wiring.
+  - `_get_kokoro()` lazy process-lifetime singleton with an asyncio lock
+    (warmup racing a request loads once); heavy import + InferenceSession
+    init run in `asyncio.to_thread`.
+  - `_synthesize_via_kokoro()` — `create()` → float32 24kHz samples →
+    clipped 16-bit mono PCM WAV (same `audio/wav` contract pyttsx3 used,
+    so the SSE base64 chunk shape and frontend playback are untouched).
+  - `_synthesize_chunk()` dispatch: kokoro → deepgram → pyttsx3.
+  - `warmup()` — preloads whisper + selected TTS engine, fire-and-forget.
+- `main.py`: `asyncio.create_task(audio_driver.warmup())` in
+  `on_startup` (never blocks readiness; failures logged inside warmup).
+
+### Verified (real backend, real audio, first-run downloads included)
+
+- Import smoke test: `from voice_cowork_backend.main import app` — clean.
+- Full HTTP loop against a scratch uvicorn (port 18081, `VC_OPENCODE_PORT`
+  bumped to 14096 to avoid the live 4096, spawn+test+terminate in one
+  script): /health → GET /internal/pin → POST /pair → POST
+  /audio/speak/stream → HTTP 200, one SSE chunk (`audio/wav`, 131116
+  bytes), first-run model download + load succeeded inside the request.
+- Output validated as a real WAV via Python `wave` module: 1 channel,
+  16-bit, **24000 Hz**, 65536 frames (2.73s of audio).
+- Warm latency (models cached, fresh process, in-process): first-chunk
+  **~1.7-2.3s** (avg 1.94s) for a 9-word sentence. Model load ~2-3s
+  once per process (warm-loaded at startup, so not on the request path).
+  Profiled: phonemize ~0.43s, onnxruntime inference+trim ~1.55s — the
+  inference is the bottleneck (this CPU runs Kokoro at RTF ~0.6-0.7 for
+  short sentences). `trim` is cheap librosa-style RMS trimming, not a
+  VAD. **First chunk is a quality upgrade over pyttsx3 but not yet a
+  latency win — that's Phase 8e work** (levers: int8/quantized model,
+  ORT thread tuning, `create_stream` intra-sentence streaming).
+- pyttsx3 fallback regression: `VC_TTS_ENGINE=pyttsx3` still produces a
+  valid WAV (1.66s first chunk) — dispatch refactor didn't break it.
+- No web-side changes needed — frontend has zero engine references and
+  plays `audio/wav` natively.
+
+### Notes / carry-forward
+
+- The user's laptop has no `ffprobe`/`ffmpeg` on PATH in this shell
+  (AGENTS.md says STT needs ffmpeg; the live environment must have it) —
+  validated the WAV with Python's `wave` instead.
+- Live-session caveat: all scratch tests used ports 18081/14096, never
+  the live 8000/4096/20241.
+- Next up per plan: **8b streaming STT** (sherpa-onnx) or the 8e latency
+  tuning if first-chunk speed is the priority.
+
+
+## Phase 8b: streaming STT shipped (sherpa-onnx) (2026-08-09)
+
+### What was built
+
+- `pyproject.toml`: added `sherpa-onnx>=1.13.0` (pulls `sherpa-onnx-core`;
+  shares the `onnxruntime` already required by kokoro-onnx).
+- `config.py`: new streaming-STT knobs — `streaming_stt_model_dir` (default
+  `~/.dani/models/sherpa-onnx`), `streaming_stt_model_url` (the en-2023-06-26
+  zipformer tarball, ~296MB), `streaming_stt_sample_rate` (16000),
+  `streaming_stt_num_threads` (2).
+- `audio_driver.py`:
+  - `_ensure_streaming_stt_model()` — one-time download + in-process
+    `tarfile` (r:bz2, `filter="data"`) extraction of the tarball; the
+    driver uses the **int8** encoder/decoder/joiner (67MB encoder vs
+    249MB fp32), layout verified from the real archive.
+  - `_import_sherpa_onnx()` — Windows footgun workaround: a stray
+    `onnxruntime.dll` in `C:\WINDOWS\system32` (v1.17.1) shadows the
+    venv's (v1.28) for the sherpa_onnx extension and trips its ORT
+    API-version check; registering the venv capi dir via
+    `os.add_dll_directory()` before the import fixes it.
+  - `_get_streaming_recognizer()` — lazy process-lifetime singleton
+    (asyncio lock + `asyncio.to_thread`), shared across requests; each
+    request owns its own `OnlineStream`.
+  - `StreamingTranscriber` — one per request: `accept_pcm(bytes)` feeds
+    raw 16kHz mono L16 PCM, decodes per 160ms chunk step, returns the
+    running transcript when it changes; `finalize()` flushes the decoder
+    with a **progressive silence tail** (the chunk-16 streaming decoder
+    keeps the last ~1s of hypothesis in flight — a clip cut exactly at
+    speech end otherwise decodes "…the RES" instead of "…the RESULTS";
+    feeding silence in 160ms steps and stopping after the hypothesis is
+    stable for two steps recovers it without a fixed +1s on every
+    request).
+- `routers/audio.py`: `/audio/transcribe/stream` is now a **WebSocket**
+  endpoint (was HTTP-POST+SSE on paper). Auth = first text frame
+  `{"token": …}`, reply `{"type":"ready"}`; binary frames are PCM,
+  partials flow as `{"type":"partial","text":…}`, the client signals
+  utterance end with `{"type":"stop"}`, then `{"type":"final",…}` + close.
+  Keep-alive not implemented (short-lived per utterance).
+
+### Why WebSocket instead of POST-body + SSE
+
+Starlette cannot stream a response while reading a streaming request
+body. Verified against uvicorn 0.51.0 with an instrumented trace: the
+`StreamingResponse` machinery runs an internal disconnect-listener task
+that races the body reader over the *single* shared ASGI `receive()`
+(`message_event` + cleared `self.body`), so body chunks silently go to
+whichever consumer wakes first and partials never arrive. WebSockets have
+independent client/server message channels — the right transport for
+bidirectional live audio.
+
+### Verified (real backend, live WebSocket)
+
+- Import smoke test: `from voice_cowork_backend.main import app` — clean.
+- Direct driver test: Kokoro-synthesized speech fed as 160ms L16 chunks →
+  9 partials, final `"PLEASE RUN THE TESTS AND SHOW ME THE RESULTS"` with
+  the silence-tail flush (before the tail fix the final was truncated).
+- Full loop on a scratch uvicorn (18082/14097, spawn+test+terminate in one
+  script): /health → /internal/pin → /pair → WebSocket connect → auth →
+  stream PCM → **6 progressive partials** (PLEASE → … → "…SHOW ME THE
+  RE") → stop → complete final. Server-side cadence (all audio sent in
+  one burst): first partial ~0.11s after audio, ~30ms/partial, final
+  ~0.32s after audio end. Auth failure path returns `{"type":"error"}` +
+  close 4401.
+- Python `tarfile` extraction path validated on a fresh model dir copy.
+
+### Notes / carry-forward
+
+- Model tarball is already cached at `~/.dani/models/sherpa-onnx`
+  (downloaded + extracted during this round); first-run cost is the
+  ~296MB download + ~19s extraction.
+- Full-clip `/audio/transcribe` (pywhispercpp) is untouched and stays the
+  browser UI path; the WS streaming endpoint is the phone-input path
+  (8c/8d).
+- Latency targets from the 8b plan (first partial ~300ms, final ~1s after
+  end-of-speech) are met on this machine; deeper tuning is 8e work.
+- Phones must send raw 16kHz mono S16LE PCM frames; ~160ms frames are a
+  good default (matches one decoder step).
+
+## Streaming STT frontend wired + phone-side VAD (2026-08-11)
+
+Closed the last two voice-pipeline drift items flagged in architecture.md §6.
+
+### What was built
+
+- **`web/lib/stt-client.ts` rewritten** to speak the backend's real protocol.
+  The old client targeted a Deepgram proxy (`/stt/stream`, auth frame
+  `{"type":"auth","token":…}`) that had **never existed in the backend** — so
+  the chat mic's live voice input was dead against a real backend since the 8b
+  swap to sherpa-onnx. Now: connects to `/audio/transcribe/stream`, sends the
+  session token as the first text frame `{"token":…}`, resolves on
+  `{"type":"ready"}`, converts Float32 frames → 16kHz s16le binary PCM, maps
+  `partial`/`final` to `SttTranscriptEvent`, `finalize()` sends `{"type":"stop"}`
+  and resolves on close. External interface (`connect/sendFrame/finalize/close`)
+  deliberately unchanged so `chat/page.tsx` needed no contract changes.
+- **Energy-based VAD in the capture worklet**
+  (`web/public/worklets/pcm-capture-worklet.js`): per-20ms-frame RMS with an
+  adaptive noise floor (slow attack while silent) and a 6-frame (~120ms)
+  hangover so word gaps don't flutter. Posts `{frame, speech}` (buffer still
+  transferred zero-copy). Silero stays a future upgrade — this is the
+  no-dependency version VOICE_ARCHITECTURE.md §2 called for.
+- **`web/lib/mic-capture.ts`**: unpacks `{frame, speech}`, adds an
+  `onSpeechChange(speech)` callback (fires only on transitions).
+- **`web/app/chat/page.tsx`**: 
+  - mic button pulses live with VAD speech in open mode (de-presses the moment
+    speech ends);
+  - open (tap-to-toggle) mode auto-stops after `VAD_AUTO_STOP_MS = 700` of
+    sustained silence — transcript stays in the composer, no auto-send;
+  - hold mode ignores VAD (physical release governs), so a mid-thought pause
+    never auto-sends;
+  - silence timer is cleared on any stop/finalize path and on unmount.
+
+### Verified
+
+- `npx tsc --noEmit`, `npm run lint`, `npm run build` — all clean.
+- Backend behavior is unchanged; the WS protocol this client now speaks is the
+  exact one verified live in the 8b round (same `{"token":…}` auth, same
+  `partial`/`final` frames, same close codes).
+
+### Notes / carry-forward
+
+- The accidental-tap / tap-threshold / deferred-release gesture logic in
+  `chat/page.tsx` is untouched — VAD only *adds* an auto-stop path for open
+  mode and a visual pulse.
+- VAD auto-stop is a phone-side UX refinement; the backend already had
+  endpoint-detection enabled in the recognizer (`enable_endpoint_detection`),
+  which is unrelated to this client-side auto-stop.
+
+## Phase 8d CLI wiring + Phase 9 E2E test (2026-08-11)
+
+### 8d — CLI flags (`--tts`, `--stt`)
+
+- `voice-cowork run` now accepts:
+  - `--tts kokoro|pyttsx3|deepgram` → sets `VC_TTS_ENGINE` for the backend
+    subprocess (validated; error + exit 1 on bad value);
+  - `--stt <model>` → sets `VC_WHISPER_MODEL` for the full-clip pywhispercpp
+    path (validated: non-empty, no spaces — any whisper.cpp model name / HF
+    repo works).
+- Model preload at boot already existed (`audio_driver.warmup()` fires from
+  `main.on_startup`), so "preload at boot" from the 8d plan was already done;
+  the flags were the missing piece.
+
+### Phase 9 — `backend/scripts/e2e_test.py`
+
+Follows the repo's live-verification culture (no pytest): spawn a scratch
+uvicorn on a free port (holding the Popen — never re-queried PIDs), run the
+full voice loop, terminate in `finally` via `ManagedProcess` + Windows Job
+Object (kill-on-close). Scratch ports for backend + opencode so the user's
+live `voice-cowork run` (8000/4096/20241) is never touched; env is snapshotted
+and restored.
+
+Checks, in order: health → `/internal/pin` → `/pair` (session token) →
+full-clip `/audio/transcribe` → streaming WS `/audio/transcribe/stream` →
+`/audio/speak/stream` SSE → optional `--with-ai` `/opencode/command/stream` →
+revoke cleanup. The test clip is synthesized with the backend's own Kokoro
+engine and resampled to 16kHz in pure Python (numpy) — no mic, no network,
+deterministic. The full-clip leg needs ffmpeg on PATH (the backend's own real
+requirement) and is **skipped with a note** when it's absent.
+
+### Verified (live runs, this machine)
+
+```
+uv run python scripts/e2e_test.py          → 5/6 checks passed (1 skipped)
+  health PASS · pair PASS (pin consumed) · full-clip SKIP (no ffmpeg on PATH)
+  streaming WS PASS: 4 partials, final 'RUN THE TESTS AND SHOW ME THE RESULTS'
+  speak/stream PASS: [start, chunk, done] · revoke PASS
+
+uv run python scripts/e2e_test.py --with-ai → 6/7 checks passed (1 skipped)
+  + opencode command/stream PASS: 3 events, first type=delta (36s — free-tier
+    TTFT, matches the VOICE_ARCHITECTURE.md §3 latency model)
+```
+
+The streaming final transcript `RUN THE TESTS AND SHOW ME THE RESULTS` exactly
+matches the phrase sherpa produced in the 8b round — the same clip, same
+decoder, verified again end-to-end through a real backend.
+
+### Notes / carry-forward
+
+- **8c firmware remains open and is blocked in this environment**: the ESP-IDF
+  toolchain is not installed here (`$env:IDF_PATH` unset, no `idf.py`, no
+  `C:\Users\jitin\esp`), so the ESP32 I2S PDM RX + device-token-authed TCP
+  audio path can't be built or flashed/verified. Also still open:
+  `camera_streamer_start()` restore (needs build+flash on hardware) and 8e
+  latency tuning.
+- Browser-only UI verification (mic gesture + VAD auto-stop feel) remains the
+  user's part — no browser automation available in this environment.
+- `architecture.md` §4/§5/§6 updated to reflect the closed gaps.

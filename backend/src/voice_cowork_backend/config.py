@@ -36,11 +36,36 @@ class Settings(BaseSettings):
 
     whisper_model: str = "base.en"
 
-    # Which TTS backend /audio/speak/stream actually uses — "pyttsx3"
-    # (local, offline, free) or "deepgram" (cloud). Switchable via
-    # VC_TTS_ENGINE without any code change; both implementations stay in
-    # audio_driver.py simultaneously rather than one replacing the other.
-    tts_engine: Literal["pyttsx3", "deepgram"] = "pyttsx3"
+    # Streaming STT via sherpa-onnx (OnlineRecognizer, streaming zipformer
+    # transducer). The phone uploads raw 16kHz mono L16 PCM to
+    # /audio/transcribe/stream and gets partial transcripts back over SSE
+    # as it talks. The model is a single tar.bz2 (~300MB) that
+    # auto-downloads + extracts on first use into VC_STREAMING_STT_MODEL_DIR,
+    # defaulting to ~/.dani/models/sherpa-onnx.
+    streaming_stt_model_dir: str | None = None
+    streaming_stt_model_url: str = (
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+        "sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2"
+    )
+    streaming_stt_sample_rate: int = 16000
+    streaming_stt_num_threads: int = 2
+
+    # Which TTS backend /audio/speak/stream actually uses — "kokoro"
+    # (local ONNX, Kokoro-82M, the default), "pyttsx3" (local SAPI5) or
+    # "deepgram" (cloud). Switchable via VC_TTS_ENGINE without any code
+    # change; all implementations stay in audio_driver.py simultaneously
+    # rather than one replacing the other.
+    tts_engine: Literal["kokoro", "pyttsx3", "deepgram"] = "kokoro"
+
+    # Kokoro-82M (kokoro-onnx) settings. Model files (kokoro-v1.0.onnx +
+    # voices-v1.0.bin, ~350MB total) auto-download on first use into
+    # VC_KOKORO_MODEL_DIR, defaulting to ~/.dani/models/kokoro (mirroring
+    # the ~/.dani convention used for downloaded binaries elsewhere in
+    # this codebase).
+    kokoro_model_dir: str | None = None
+    kokoro_voice: str = "af_sarah"
+    kokoro_lang: str = "en-us"
+    kokoro_speed: float = 1.0
 
     # pyttsx3 voice ID (SAPI5 registry token on Windows) — None uses
     # whatever pyttsx3.init() picks as its own default voice on this

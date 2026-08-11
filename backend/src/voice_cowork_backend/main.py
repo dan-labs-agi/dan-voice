@@ -1,3 +1,5 @@
+import asyncio
+
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +9,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from voice_cowork_backend.config import jwt_secret_was_generated, settings
+from voice_cowork_backend import audio_driver
 from voice_cowork_backend.logging import configure_logging
 from voice_cowork_backend.network import get_client_ip
 from voice_cowork_backend.opencode_driver import opencode_driver
@@ -80,6 +83,11 @@ async def on_startup() -> None:
         raise
 
     opencode_driver.start_event_listener()
+
+    # Fire-and-forget model preload (whisper + the selected TTS engine) so
+    # the first /audio request doesn't pay the load cost. Never blocks
+    # startup / readiness; failures are logged inside warmup().
+    asyncio.create_task(audio_driver.warmup())
 
 
 @app.on_event("shutdown")

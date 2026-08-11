@@ -325,6 +325,21 @@ def run(
         '"dani-cli" (the branded fork), or "mimocode" (@mimo-ai/cli\'s '
         '`mimo serve`). Overrides VC_AI_TOOL / the config default when given.',
     ),
+    tts_engine: str = typer.Option(
+        None,
+        "--tts",
+        help='TTS engine for /audio/speak/stream: "kokoro" (local ONNX, '
+        "default), \"pyttsx3\" (local SAPI5), or \"deepgram\" (cloud). "
+        "Overrides VC_TTS_ENGINE / the config default when given.",
+    ),
+    stt_model: str = typer.Option(
+        None,
+        "--stt",
+        help='Full-clip STT model for /audio/transcribe (pywhispercpp): '
+        "e.g. \"base.en\" (default), \"small.en\", \"tiny.en\". Any "
+        "whisper.cpp model name or HF repo works. Overrides VC_WHISPER_MODEL "
+        "/ the config default when given.",
+    ),
 ) -> None:
     """Start the backend and Cloudflare tunnel, then print the pairing PIN."""
     if ai_tool is not None:
@@ -335,6 +350,22 @@ def run(
             )
             raise SystemExit(1)
         cli_settings.ai_tool = ai_tool
+    if tts_engine is not None:
+        if tts_engine not in ("kokoro", "pyttsx3", "deepgram"):
+            print(
+                f"--tts must be 'kokoro', 'pyttsx3', or 'deepgram', got '{tts_engine}'",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        os.environ["VC_TTS_ENGINE"] = tts_engine
+    if stt_model is not None:
+        if not stt_model.strip() or any(ch.isspace() for ch in stt_model):
+            print(
+                f"--stt must be a single whisper.cpp model name (no spaces), got '{stt_model}'",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        os.environ["VC_WHISPER_MODEL"] = stt_model
     start()
 
 

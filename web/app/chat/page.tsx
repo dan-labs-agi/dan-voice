@@ -185,6 +185,11 @@ export default function ChatPage() {
     setMicState(next);
   }
 
+  // Live energy-VAD speech flag from the capture worklet — drives the mic
+  // button's visual state (de-presses on silence) and the open-mode
+  // auto-stop timer. Only meaningful while a capture is running.
+  const [micSpeaking, setMicSpeaking] = useState(false);
+
   const micCaptureRef = useRef<MicCapture | null>(null);
   const sttClientRef = useRef<SttClient | null>(null);
   // The transcript actually sent/kept — kept in a ref, not just React
@@ -210,6 +215,10 @@ export default function ChatPage() {
   const setupCompleteRef = useRef(false);
   const deferredReleaseRef = useRef<"discard" | "open" | null>(null);
   const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Auto-stop timer for open (tap-to-toggle) mode — armed when the VAD
+  // reports silence, fired when the user has stayed silent long enough
+  // (VAD_AUTO_STOP_MS) to count as "done talking".
+  const vadSilenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // /chat requires an already-established session — this isn't a
   // provisioning path, just a guard for someone reaching this route
@@ -347,6 +356,7 @@ export default function ChatPage() {
     return () => {
       playbackQueueRef.current?.pause();
       if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
+      if (vadSilenceTimerRef.current) clearTimeout(vadSilenceTimerRef.current);
       micCaptureRef.current?.stop();
       sttClientRef.current?.close();
       Object.values(cache).forEach((urls) => urls.forEach((url) => url && URL.revokeObjectURL(url)));
@@ -508,6 +518,9 @@ export default function ChatPage() {
   // the threshold while still pressed, it's a confirmed hold.
   const ACCIDENTAL_TAP_MS = 100;
   const TAP_HOLD_THRESHOLD_MS = 350;
+  // Sustained silence (energy-VAD) in open mode before auto-stop. Mirrors
+  // the ~700ms figure from VOICE_ARCHITECTURE.md's VAD section.
+  const VAD_AUTO_STOP_MS = 700;
 
   // Deterministic, explicit interrupt: pressing the mic always stops
   // whatever's currently playing before capture starts, whether that's
@@ -524,11 +537,37 @@ export default function ChatPage() {
     setPlayingId(null);
   }
 
+  // VAD-driven behavior for the running capture. Speech going true
+  // always cancels any pending auto-stop; speech going false only arms
+  // one while in "open" mode — in "hold" mode the physical release is
+  // what governs, so a mid-thought pause must never auto-send. On fire
+  // the recording auto-finalizes (transcript stays in the composer, no
+  // auto-send) — the tap-to-toggle stop action, hands-free.
+  function handleSpeechChange(speech: boolean) {
+    setMicSpeaking(speech);
+    if (vadSilenceTimerRef.current) {
+      clearTimeout(vadSilenceTimerRef.current);
+      vadSilenceTimerRef.current = null;
+    }
+    if (speech) return;
+    if (micStateRef.current !== "open") return;
+    vadSilenceTimerRef.current = setTimeout(() => {
+      vadSilenceTimerRef.current = null;
+      if (micStateRef.current !== "open") return;
+      setMicPhase("finalizing");
+      void finalizeCapture().then(() => setMicPhase("idle"));
+    }, VAD_AUTO_STOP_MS);
+  }
+
   // Stops capture/STT without sending — used for a genuinely accidental
   // release (under ACCIDENTAL_TAP_MS) and doesn't need to wait for
   // Deepgram's finalize handshake, since nothing captured is going to be
   // used.
   function stopCaptureSilently(): void {
+    if (vadSilenceTimerRef.current) {
+      clearTimeout(vadSilenceTimerRef.current);
+      vadSilenceTimerRef.current = null;
+    }
     const capture = micCaptureRef.current;
     const stt = sttClientRef.current;
     micCaptureRef.current = null;
@@ -537,6 +576,7 @@ export default function ChatPage() {
     stt?.close();
     finalTranscriptRef.current = "";
     setCommandText("");
+    setMicSpeaking(false);
   }
 
   // Stops capture and waits for Deepgram's finalize handshake, returning
@@ -544,12 +584,17 @@ export default function ChatPage() {
   // confirmed-hold release path (auto-send) and the open-mode second-tap
   // stop path (no send).
   async function finalizeCapture(): Promise<string> {
+    if (vadSilenceTimerRef.current) {
+      clearTimeout(vadSilenceTimerRef.current);
+      vadSilenceTimerRef.current = null;
+    }
     const capture = micCaptureRef.current;
     const stt = sttClientRef.current;
     micCaptureRef.current = null;
     sttClientRef.current = null;
     capture?.stop();
     await stt?.finalize();
+    setMicSpeaking(false);
     return finalTranscriptRef.current.trim();
   }
 
@@ -575,6 +620,7 @@ export default function ChatPage() {
     setMicPhase("pending");
     setupCompleteRef.current = false;
     deferredReleaseRef.current = null;
+    setMicSpeaking(false);
     // This runs only inside a real pointer-event callback, never during
     // render; the purity rule's static analysis can't trace that
     // through the async/Promise indirection, but there's no
@@ -617,14 +663,17 @@ export default function ChatPage() {
           setCommandText(event.text);
         }
       });
-      await capture.start((frame) => {
-        if (!firstFrameLoggedRef.current) {
-          firstFrameLoggedRef.current = true;
-          const latencyMs = performance.now() - holdStartRef.current;
-          console.log(`[mic] press -> first PCM frame sent: ${latencyMs.toFixed(1)}ms`);
-        }
-        sttClientRef.current?.sendFrame(frame);
-      });
+      await capture.start(
+        (frame) => {
+          if (!firstFrameLoggedRef.current) {
+            firstFrameLoggedRef.current = true;
+            const latencyMs = performance.now() - holdStartRef.current;
+            console.log(`[mic] press -> first PCM frame sent: ${latencyMs.toFixed(1)}ms`);
+          }
+          sttClientRef.current?.sendFrame(frame);
+        },
+        handleSpeechChange,
+      );
     } catch (err) {
       console.error("[mic] setup failed", err);
       if (pendingTimerRef.current) {
@@ -1150,6 +1199,10 @@ export default function ChatPage() {
               (micState === "pending" || micState === "hold") &&
                 "text-red-600 dark:text-red-400 animate-pulse",
               micState === "open" && "text-red-600 dark:text-red-400",
+              // In open mode the pulse tracks live VAD speech — the
+              // button visually "de-presses" the moment the user stops
+              // talking, even before the auto-stop timer fires.
+              micState === "open" && micSpeaking && "animate-pulse",
             )}
             disabled={
               micState === "finalizing" ||

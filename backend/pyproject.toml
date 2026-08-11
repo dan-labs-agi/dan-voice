@@ -21,6 +21,8 @@ dependencies = [
     "structlog>=26.1.0",
     "typer>=0.27.0",
     "uvicorn[standard]>=0.51.0",
+    "kokoro-onnx>=0.5.0",
+    "sherpa-onnx>=1.13.0",
 ]
 
 [project.scripts]

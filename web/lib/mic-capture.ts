@@ -4,8 +4,9 @@
 // actually runs at (not guaranteed to be 16kHz or even 44.1kHz across
 // browsers — read back and resample from the real value, never assume
 // one), and hands the caller back mono Float32 frames resampled to
-// TARGET_SAMPLE_RATE. No network wiring here — see stt-client.ts for
-// what consumes these frames.
+// TARGET_SAMPLE_RATE, plus an energy-based speech flag computed in the
+// worklet (see public/worklets/pcm-capture-worklet.js). No network wiring
+// here — see stt-client.ts for what consumes these frames.
 const TARGET_SAMPLE_RATE = 16000;
 const WORKLET_URL = "/worklets/pcm-capture-worklet.js";
 const WORKLET_NAME = "pcm-capture-processor";
@@ -36,8 +37,12 @@ export class MicCapture {
   private sourceNode: MediaStreamAudioSourceNode | null = null;
   private workletNode: AudioWorkletNode | null = null;
   private stream: MediaStream | null = null;
+  private _lastSpeech: boolean | null = null;
 
-  async start(onFrame: (frame: Float32Array, sampleRate: number) => void): Promise<void> {
+  async start(
+    onFrame: (frame: Float32Array, sampleRate: number) => void,
+    onSpeechChange?: (speech: boolean) => void,
+  ): Promise<void> {
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     });
@@ -49,8 +54,13 @@ export class MicCapture {
 
     this.sourceNode = this.audioContext.createMediaStreamSource(this.stream);
     this.workletNode = new AudioWorkletNode(this.audioContext, WORKLET_NAME);
-    this.workletNode.port.onmessage = (event: MessageEvent<Float32Array>) => {
-      const resampled = resampleLinear(event.data, actualSampleRate, TARGET_SAMPLE_RATE);
+    this.workletNode.port.onmessage = (event: MessageEvent<{ frame: Float32Array; speech: boolean }>) => {
+      const { frame, speech } = event.data;
+      if (speech !== this._lastSpeech) {
+        this._lastSpeech = speech;
+        onSpeechChange?.(speech);
+      }
+      const resampled = resampleLinear(frame, actualSampleRate, TARGET_SAMPLE_RATE);
       onFrame(resampled, TARGET_SAMPLE_RATE);
     };
 
@@ -76,6 +86,7 @@ export class MicCapture {
     this.sourceNode = null;
     this.stream = null;
     this.audioContext = null;
+    this._lastSpeech = null;
   }
 
   get isCapturing(): boolean {

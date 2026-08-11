@@ -2,7 +2,7 @@ import base64
 import json
 
 import structlog
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, WebSocket
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -33,6 +33,75 @@ async def transcribe(file: UploadFile = File(...)) -> TranscribeResponse:
     text = await audio_driver.transcribe_audio(data)
     log.info("audio_transcribe_done", length=len(text))
     return TranscribeResponse(text=text)
+
+
+@router.websocket("/transcribe/stream")
+async def transcribe_stream(websocket: WebSocket) -> None:
+    """WebSocket streaming STT: the client uploads raw 16kHz mono L16 PCM
+    as binary frames (~20-160ms per frame for useful partial latency) and
+    receives text frames as it talks — `partial` events whenever the
+    running transcript changes, then a `final` event when the client
+    closes the upload (which finalizes the request), then the server
+    closes the socket.
+
+    Why WebSocket and not POST-body + SSE: Starlette's StreamingResponse
+    races its internal disconnect-listener task against a request-body
+    reader over the single shared ASGI receive channel, so a response
+    cannot be streamed while a request body is being streamed (verified
+    against uvicorn 0.51 — partials silently never arrive). WebSockets
+    have independent client/server message channels, so they're the right
+    transport for bidirectional live audio.
+
+    Auth happens on the first message: the client sends a JSON text frame
+    `{"token": "<session token>"}`; the server replies `{"type": "ready"}`
+    before accepting audio (WebSockets can't use the HTTPBearer scheme).
+    The client ends the utterance by sending a JSON text frame
+    `{"type": "stop"}` (a plain socket close also finalizes, but the final
+    transcript can't then be delivered).
+    """
+    await websocket.accept()
+    try:
+        auth_message = await websocket.receive_text()
+        try:
+            verify_session_token(json.loads(auth_message).get("token", ""))
+        except SessionVerificationError as exc:
+            log.info("audio_transcribe_stream_auth_failed")
+            await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
+            await websocket.close(code=4401)
+            return
+
+        log.info("audio_transcribe_stream_started")
+        await websocket.send_text(json.dumps({"type": "ready"}))
+        transcriber = await audio_driver.create_streaming_transcriber()
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+            if message.get("text"):
+                try:
+                    if json.loads(message["text"]).get("type") == "stop":
+                        break
+                except (ValueError, TypeError):
+                    pass
+            chunk = message.get("bytes")
+            if not chunk:
+                continue
+            text = await transcriber.accept_pcm(chunk)
+            if text:
+                await websocket.send_text(json.dumps({"type": "partial", "text": text}))
+        final = await transcriber.finalize()
+        try:
+            await websocket.send_text(json.dumps({"type": "final", "text": final}))
+            await websocket.close(code=1000)
+        except Exception:
+            pass
+    except Exception as exc:
+        log.warning("audio_transcribe_stream_error", exc_info=exc)
+        try:
+            await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
+            await websocket.close(code=1011)
+        except Exception:
+            pass
 
 
 @router.post("/speak/stream", dependencies=[Depends(_require_session)])
